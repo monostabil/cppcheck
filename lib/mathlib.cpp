@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,14 +18,17 @@
 
 
 #include "mathlib.h"
-#include "errorlogger.h"
+#include "errortypes.h"
 #include "utils.h"
+
+#include <simplecpp.h>
 
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <locale>
+#include <stdexcept>
 
 #if defined(_MSC_VER) && _MSC_VER <= 1700  // VS2012 doesn't have std::isinf and std::isnan
 #define ISINF(x)      (!_finite(x))
@@ -44,7 +47,7 @@ MathLib::value::value(const std::string &s) :
     mIntValue(0), mDoubleValue(0), mIsUnsigned(false)
 {
     if (MathLib::isFloat(s)) {
-        mType = MathLib::value::FLOAT;
+        mType = MathLib::value::Type::FLOAT;
         mDoubleValue = MathLib::toDoubleNumber(s);
         return;
     }
@@ -52,7 +55,7 @@ MathLib::value::value(const std::string &s) :
     if (!MathLib::isInt(s))
         throw InternalError(nullptr, "Invalid value: " + s);
 
-    mType = MathLib::value::INT;
+    mType = MathLib::value::Type::INT;
     mIntValue = MathLib::toLongNumber(s);
 
     if (isIntHex(s) && mIntValue < 0)
@@ -65,12 +68,12 @@ MathLib::value::value(const std::string &s) :
             if (c == 'u' || c == 'U')
                 mIsUnsigned = true;
             else if (c == 'l' || c == 'L') {
-                if (mType == MathLib::value::INT)
-                    mType = MathLib::value::LONG;
-                else if (mType == MathLib::value::LONG)
-                    mType = MathLib::value::LONGLONG;
+                if (mType == MathLib::value::Type::INT)
+                    mType = MathLib::value::Type::LONG;
+                else if (mType == MathLib::value::Type::LONG)
+                    mType = MathLib::value::Type::LONGLONG;
             } else if (i > 2U && c == '4' && s[i-1] == '6' && s[i-2] == 'i')
-                mType = MathLib::value::LONGLONG;
+                mType = MathLib::value::Type::LONGLONG;
         }
     }
 }
@@ -78,7 +81,7 @@ MathLib::value::value(const std::string &s) :
 std::string MathLib::value::str() const
 {
     std::ostringstream ostr;
-    if (mType == MathLib::value::FLOAT) {
+    if (mType == MathLib::value::Type::FLOAT) {
         if (ISNAN(mDoubleValue))
             return "nan.0";
         if (ISINF(mDoubleValue))
@@ -102,9 +105,9 @@ std::string MathLib::value::str() const
         ostr << static_cast<biguint>(mIntValue) << "U";
     else
         ostr << mIntValue;
-    if (mType == MathLib::value::LONG)
+    if (mType == MathLib::value::Type::LONG)
         ostr << "L";
-    else if (mType == MathLib::value::LONGLONG)
+    else if (mType == MathLib::value::Type::LONGLONG)
         ostr << "LL";
     return ostr.str();
 }
@@ -121,7 +124,7 @@ void MathLib::value::promote(const MathLib::value &v)
     } else if (!isFloat()) {
         mIsUnsigned = false;
         mDoubleValue = mIntValue;
-        mType = MathLib::value::FLOAT;
+        mType = MathLib::value::Type::FLOAT;
     }
 }
 
@@ -294,31 +297,30 @@ MathLib::biguint MathLib::toULongNumber(const std::string & str)
 {
     // hexadecimal numbers:
     if (isIntHex(str)) {
-        if (str[0] == '-') {
-            biguint ret = 0;
-            std::istringstream istr(str);
-            istr >> std::hex >> ret;
+        try {
+            const biguint ret = std::stoull(str, nullptr, 16);
             return ret;
-        } else {
-            unsigned long long ret = 0;
-            std::istringstream istr(str);
-            istr >> std::hex >> ret;
-            return (biguint)ret;
+        } catch (const std::out_of_range& e) {
+            throw InternalError(nullptr, "Internal Error. MathLib::toULongNumber: out_of_range: " + str + " (" + e.what() +")");
         }
     }
 
     // octal numbers:
     if (isOct(str)) {
-        biguint ret = 0;
-        std::istringstream istr(str);
-        istr >> std::oct >> ret;
-        return ret;
+        try {
+            const biguint ret = std::stoull(str, nullptr, 8);
+            return ret;
+        } catch (const std::out_of_range& e) {
+            throw InternalError(nullptr, "Internal Error. MathLib::toULongNumber: out_of_range: " + str + " (" + e.what() +")");
+        }
     }
 
     // binary numbers:
     if (isBin(str)) {
         biguint ret = 0;
         for (std::string::size_type i = str[0] == '0'?2:3; i < str.length(); i++) {
+            if (str[i] != '1' && str[i] != '0')
+                break;
             ret <<= 1;
             if (str[i] == '1')
                 ret |= 1;
@@ -338,55 +340,28 @@ MathLib::biguint MathLib::toULongNumber(const std::string & str)
             return static_cast<biguint>(doubleval);
     }
 
-    biguint ret = 0;
-    std::istringstream istr(str);
-    istr >> ret;
-    return ret;
+    try {
+        const biguint ret = std::stoull(str, nullptr, 10);
+        return ret;
+    } catch (const std::out_of_range& e) {
+        throw InternalError(nullptr, "Internal Error. MathLib::toULongNumber: out_of_range: " + str + " (" + e.what() +")");
+    }
 }
 
-static unsigned int encodeMultiChar(const std::string& str)
+unsigned int MathLib::encodeMultiChar(const std::string& str)
 {
     unsigned int retval = 0;
-    for (std::string::const_iterator it=str.begin(); it!=str.end(); ++it) {
-        retval = (retval << 8) | *it;
+    for (char it : str) {
+        retval = (retval << 8) | it;
     }
     return retval;
-}
-
-static bool isoctal(int c)
-{
-    return c>='0' && c<='7';
-}
-
-MathLib::bigint MathLib::characterLiteralToLongNumber(const std::string& str)
-{
-    if (str.empty())
-        return 0; // <- only possible in unit testing
-
-    // '\xF6'
-    if (str.size() == 4 && str.compare(0,2,"\\x")==0 && std::isxdigit(str[2]) && std::isxdigit(str[3])) {
-        return std::strtoul(str.substr(2).c_str(), nullptr, 16);
-    }
-
-    // '\123'
-    if (str.size() == 4 && str[0] == '\\' && isoctal(str[1]) && isoctal(str[2]) && isoctal(str[3])) {
-        return (char)std::strtoul(str.substr(1).c_str(), NULL, 8);
-    }
-
-    // C99 6.4.4.4
-    // The value of an integer character constant containing more than one character (e.g., 'ab'),
-    // or containing a character or escape sequence that does not map to a single-byte execution character,
-    // is implementation-defined.
-    // clang and gcc seem to use the following encoding: 'AB' as (('A' << 8) | 'B')
-    const std::string& normStr = normalizeCharacterLiteral(str);
-    return encodeMultiChar(normStr);
 }
 
 std::string MathLib::normalizeCharacterLiteral(const std::string& iLiteral)
 {
     std::string normalizedLiteral;
     const std::string::size_type iLiteralLen = iLiteral.size();
-    for (std::string::size_type idx = 0; idx < iLiteralLen ; ++idx) {
+    for (std::string::size_type idx = 0; idx < iLiteralLen; ++idx) {
         if (iLiteral[idx] != '\\') {
             normalizedLiteral.push_back(iLiteral[idx]);
             continue;
@@ -485,31 +460,30 @@ MathLib::bigint MathLib::toLongNumber(const std::string & str)
 {
     // hexadecimal numbers:
     if (isIntHex(str)) {
-        if (str[0] == '-') {
-            bigint ret = 0;
-            std::istringstream istr(str);
-            istr >> std::hex >> ret;
-            return ret;
-        } else {
-            unsigned long long ret = 0;
-            std::istringstream istr(str);
-            istr >> std::hex >> ret;
+        try {
+            const biguint ret = std::stoull(str, nullptr, 16);
             return (bigint)ret;
+        } catch (const std::out_of_range& e) {
+            throw InternalError(nullptr, "Internal Error. MathLib::toLongNumber: out_of_range: " + str + " (" + e.what() +")");
         }
     }
 
     // octal numbers:
     if (isOct(str)) {
-        bigint ret = 0;
-        std::istringstream istr(str);
-        istr >> std::oct >> ret;
-        return ret;
+        try {
+            const biguint ret = std::stoull(str, nullptr, 8);
+            return ret;
+        } catch (const std::out_of_range& e) {
+            throw InternalError(nullptr, "Internal Error. MathLib::toLongNumber: out_of_range: " + str + " (" + e.what() +")");
+        }
     }
 
     // binary numbers:
     if (isBin(str)) {
         bigint ret = 0;
         for (std::string::size_type i = str[0] == '0'?2:3; i < str.length(); i++) {
+            if (str[i] != '1' && str[i] != '0')
+                break;
             ret <<= 1;
             if (str[i] == '1')
                 ret |= 1;
@@ -531,21 +505,15 @@ MathLib::bigint MathLib::toLongNumber(const std::string & str)
             return static_cast<bigint>(doubleval);
     }
 
-    if (str[0] == '\'' && str.size() >= 3U && endsWith(str,'\'')) {
-        return characterLiteralToLongNumber(str.substr(1,str.size()-2));
-    }
+    if (isCharLiteral(str))
+        return simplecpp::characterLiteralToLL(str);
 
-    if (str[0] == '-') {
-        bigint ret = 0;
-        std::istringstream istr(str);
-        istr >> ret;
+    try {
+        const biguint ret = std::stoull(str, nullptr, 10);
         return ret;
+    } catch (const std::out_of_range& e) {
+        throw InternalError(nullptr, "Internal Error. MathLib::toLongNumber: out_of_range: " + str + " (" + e.what() +")");
     }
-
-    biguint ret = 0;
-    std::istringstream istr(str);
-    istr >> ret;
-    return ret;
 }
 
 // in-place conversion of (sub)string to double. Requires no heap.
@@ -565,7 +533,7 @@ static double myStod(const std::string& str, std::string::const_iterator from, s
     int distance;
     if (std::string::npos == decimalsep) {
         distance = to - it;
-    } else  if (decimalsep > (to - str.begin()))
+    } else if (decimalsep > (to - str.begin()))
         return 0.; // error handling??
     else
         distance = int(decimalsep)-(from - str.begin());
@@ -588,7 +556,7 @@ static double myStod(const std::string& str, std::string::const_iterator from, s
 
 // Assuming a limited support of built-in hexadecimal floats (see C99, C++17) that is a fall-back implementation.
 // Performance has been optimized WRT to heap activity, however the calculation part is not optimized.
-static double FloatHexToDoubleNumber(const std::string& str)
+static double floatHexToDoubleNumber(const std::string& str)
 {
     const std::size_t p = str.find_first_of("pP",3);
     const double factor1 = myStod(str, str.begin() + 2, str.begin()+p, 16);
@@ -600,20 +568,25 @@ static double FloatHexToDoubleNumber(const std::string& str)
 
 double MathLib::toDoubleNumber(const std::string &str)
 {
-    if (str[0] == '\'' && str.size() >= 3U && endsWith(str,'\''))
-        return characterLiteralToLongNumber(str.substr(1,str.size()-2));
+    if (isCharLiteral(str)) {
+        try {
+            return simplecpp::characterLiteralToLL(str);
+        } catch (const std::exception& e) {
+            throw InternalError(nullptr, "Internal Error. MathLib::toLongNumber: characterLiteralToLL(" + str + ") => " + e.what());
+        }
+    }
     if (isIntHex(str))
         return static_cast<double>(toLongNumber(str));
     // nullcheck
     if (isNullValue(str))
         return 0.0;
-#ifdef __clang__
+#ifdef _LIBCPP_VERSION
     if (isFloat(str)) // Workaround libc++ bug at http://llvm.org/bugs/show_bug.cgi?id=17782
         // TODO : handle locale
         return std::strtod(str.c_str(), nullptr);
 #endif
     if (isFloatHex(str))
-        return FloatHexToDoubleNumber(str);
+        return floatHexToDoubleNumber(str);
     // otherwise, convert to double
     std::istringstream istr(str);
     istr.imbue(std::locale::classic());
@@ -622,7 +595,7 @@ double MathLib::toDoubleNumber(const std::string &str)
     return ret;
 }
 
-template<> std::string MathLib::toString(double value)
+template<> std::string MathLib::toString<double>(double value)
 {
     std::ostringstream result;
     result.precision(12);
@@ -643,87 +616,87 @@ bool MathLib::isDecimalFloat(const std::string &str)
 {
     if (str.empty())
         return false;
-    enum State {
+    enum class State {
         START, BASE_DIGITS1, LEADING_DECIMAL, TRAILING_DECIMAL, BASE_DIGITS2, E, MANTISSA_PLUSMINUS, MANTISSA_DIGITS, SUFFIX_F, SUFFIX_L
-    } state = START;
+    } state = State::START;
     std::string::const_iterator it = str.begin();
     if ('+' == *it || '-' == *it)
         ++it;
     for (; it != str.end(); ++it) {
         switch (state) {
-        case START:
+        case State::START:
             if (*it=='.')
-                state=LEADING_DECIMAL;
+                state = State::LEADING_DECIMAL;
             else if (std::isdigit(static_cast<unsigned char>(*it)))
-                state=BASE_DIGITS1;
+                state = State::BASE_DIGITS1;
             else
                 return false;
             break;
-        case LEADING_DECIMAL:
+        case State::LEADING_DECIMAL:
             if (std::isdigit(static_cast<unsigned char>(*it)))
-                state=BASE_DIGITS2;
+                state = State::BASE_DIGITS2;
             else
                 return false;
             break;
-        case BASE_DIGITS1:
+        case State::BASE_DIGITS1:
             if (*it=='e' || *it=='E')
-                state=E;
+                state = State::E;
             else if (*it=='.')
-                state=TRAILING_DECIMAL;
+                state = State::TRAILING_DECIMAL;
             else if (!std::isdigit(static_cast<unsigned char>(*it)))
                 return false;
             break;
-        case TRAILING_DECIMAL:
+        case State::TRAILING_DECIMAL:
             if (*it=='e' || *it=='E')
-                state=E;
+                state = State::E;
             else if (*it=='f' || *it=='F')
-                state=SUFFIX_F;
+                state = State::SUFFIX_F;
             else if (*it=='l' || *it=='L')
-                state=SUFFIX_L;
+                state = State::SUFFIX_L;
             else if (std::isdigit(static_cast<unsigned char>(*it)))
-                state=BASE_DIGITS2;
+                state = State::BASE_DIGITS2;
             else
                 return false;
             break;
-        case BASE_DIGITS2:
+        case State::BASE_DIGITS2:
             if (*it=='e' || *it=='E')
-                state=E;
+                state = State::E;
             else if (*it=='f' || *it=='F')
-                state=SUFFIX_F;
+                state = State::SUFFIX_F;
             else if (*it=='l' || *it=='L')
-                state=SUFFIX_L;
+                state = State::SUFFIX_L;
             else if (!std::isdigit(static_cast<unsigned char>(*it)))
                 return false;
             break;
-        case E:
+        case State::E:
             if (*it=='+' || *it=='-')
-                state=MANTISSA_PLUSMINUS;
+                state = State::MANTISSA_PLUSMINUS;
             else if (std::isdigit(static_cast<unsigned char>(*it)))
-                state=MANTISSA_DIGITS;
+                state = State::MANTISSA_DIGITS;
             else
                 return false;
             break;
-        case MANTISSA_PLUSMINUS:
+        case State::MANTISSA_PLUSMINUS:
             if (!std::isdigit(static_cast<unsigned char>(*it)))
                 return false;
             else
-                state=MANTISSA_DIGITS;
+                state = State::MANTISSA_DIGITS;
             break;
-        case MANTISSA_DIGITS:
+        case State::MANTISSA_DIGITS:
             if (*it=='f' || *it=='F')
-                state=SUFFIX_F;
+                state = State::SUFFIX_F;
             else if (*it=='l' || *it=='L')
-                state=SUFFIX_L;
+                state = State::SUFFIX_L;
             else if (!std::isdigit(static_cast<unsigned char>(*it)))
                 return false;
             break;
-        case SUFFIX_F:
+        case State::SUFFIX_F:
             return false;
-        case SUFFIX_L:
+        case State::SUFFIX_L:
             return false;
         }
     }
-    return (state==BASE_DIGITS2 || state==MANTISSA_DIGITS || state==TRAILING_DECIMAL || state==SUFFIX_F || state==SUFFIX_L);
+    return (state==State::BASE_DIGITS2 || state==State::MANTISSA_DIGITS || state==State::TRAILING_DECIMAL || state==State::SUFFIX_F || state==State::SUFFIX_L);
 }
 
 bool MathLib::isNegative(const std::string &str)
@@ -740,72 +713,72 @@ bool MathLib::isPositive(const std::string &str)
     return !MathLib::isNegative(str);
 }
 
-static bool _isValidIntegerSuffix(std::string::const_iterator it, std::string::const_iterator end, bool supportMicrosoftExtensions=true)
+static bool isValidIntegerSuffixIt(std::string::const_iterator it, std::string::const_iterator end, bool supportMicrosoftExtensions=true)
 {
-    enum { START, SUFFIX_U, SUFFIX_UL, SUFFIX_ULL, SUFFIX_L, SUFFIX_LU, SUFFIX_LL, SUFFIX_LLU, SUFFIX_I, SUFFIX_I6, SUFFIX_I64, SUFFIX_UI, SUFFIX_UI6, SUFFIX_UI64 } state = START;
+    enum class Status { START, SUFFIX_U, SUFFIX_UL, SUFFIX_ULL, SUFFIX_L, SUFFIX_LU, SUFFIX_LL, SUFFIX_LLU, SUFFIX_I, SUFFIX_I6, SUFFIX_I64, SUFFIX_UI, SUFFIX_UI6, SUFFIX_UI64 } state = Status::START;
     for (; it != end; ++it) {
         switch (state) {
-        case START:
+        case Status::START:
             if (*it == 'u' || *it == 'U')
-                state = SUFFIX_U;
+                state = Status::SUFFIX_U;
             else if (*it == 'l' || *it == 'L')
-                state = SUFFIX_L;
+                state = Status::SUFFIX_L;
             else if (supportMicrosoftExtensions && (*it == 'i' || *it == 'I'))
-                state = SUFFIX_I;
+                state = Status::SUFFIX_I;
             else
                 return false;
             break;
-        case SUFFIX_U:
+        case Status::SUFFIX_U:
             if (*it == 'l' || *it == 'L')
-                state = SUFFIX_UL; // UL
+                state = Status::SUFFIX_UL; // UL
             else if (supportMicrosoftExtensions && (*it == 'i' || *it == 'I'))
-                state = SUFFIX_UI;
+                state = Status::SUFFIX_UI;
             else
                 return false;
             break;
-        case SUFFIX_UL:
+        case Status::SUFFIX_UL:
             if (*it == 'l' || *it == 'L')
-                state = SUFFIX_ULL; // ULL
+                state = Status::SUFFIX_ULL; // ULL
             else
                 return false;
             break;
-        case SUFFIX_L:
+        case Status::SUFFIX_L:
             if (*it == 'u' || *it == 'U')
-                state = SUFFIX_LU; // LU
+                state = Status::SUFFIX_LU; // LU
             else if (*it == 'l' || *it == 'L')
-                state = SUFFIX_LL; // LL
+                state = Status::SUFFIX_LL; // LL
             else
                 return false;
             break;
-        case SUFFIX_LU:
+        case Status::SUFFIX_LU:
             return false;
-        case SUFFIX_LL:
+        case Status::SUFFIX_LL:
             if (*it == 'u' || *it == 'U')
-                state = SUFFIX_LLU; // LLU
+                state = Status::SUFFIX_LLU; // LLU
             else
                 return false;
             break;
-        case SUFFIX_I:
+        case Status::SUFFIX_I:
             if (*it == '6')
-                state = SUFFIX_I6;
+                state = Status::SUFFIX_I6;
             else
                 return false;
             break;
-        case SUFFIX_I6:
+        case Status::SUFFIX_I6:
             if (*it == '4')
-                state = SUFFIX_I64;
+                state = Status::SUFFIX_I64;
             else
                 return false;
             break;
-        case SUFFIX_UI:
+        case Status::SUFFIX_UI:
             if (*it == '6')
-                state = SUFFIX_UI6;
+                state = Status::SUFFIX_UI6;
             else
                 return false;
             break;
-        case SUFFIX_UI6:
+        case Status::SUFFIX_UI6:
             if (*it == '4')
-                state = SUFFIX_UI64;
+                state = Status::SUFFIX_UI64;
             else
                 return false;
             break;
@@ -813,20 +786,20 @@ static bool _isValidIntegerSuffix(std::string::const_iterator it, std::string::c
             return false;
         }
     }
-    return ((state == SUFFIX_U) ||
-            (state == SUFFIX_L) ||
-            (state == SUFFIX_UL) ||
-            (state == SUFFIX_LU) ||
-            (state == SUFFIX_LL) ||
-            (state == SUFFIX_ULL) ||
-            (state == SUFFIX_LLU) ||
-            (state == SUFFIX_I64) ||
-            (state == SUFFIX_UI64));
+    return ((state == Status::SUFFIX_U) ||
+            (state == Status::SUFFIX_L) ||
+            (state == Status::SUFFIX_UL) ||
+            (state == Status::SUFFIX_LU) ||
+            (state == Status::SUFFIX_LL) ||
+            (state == Status::SUFFIX_ULL) ||
+            (state == Status::SUFFIX_LLU) ||
+            (state == Status::SUFFIX_I64) ||
+            (state == Status::SUFFIX_UI64));
 }
 
 bool MathLib::isValidIntegerSuffix(const std::string& str, bool supportMicrosoftExtensions)
 {
-    return _isValidIntegerSuffix(str.begin(), str.end(), supportMicrosoftExtensions);
+    return isValidIntegerSuffixIt(str.begin(), str.end(), supportMicrosoftExtensions);
 }
 
 
@@ -842,9 +815,9 @@ bool MathLib::isValidIntegerSuffix(const std::string& str, bool supportMicrosoft
  **/
 bool MathLib::isOct(const std::string& str)
 {
-    enum Status {
+    enum class Status {
         START, OCTAL_PREFIX, DIGITS
-    } state = START;
+    } state = Status::START;
     if (str.empty())
         return false;
     std::string::const_iterator it = str.begin();
@@ -852,34 +825,34 @@ bool MathLib::isOct(const std::string& str)
         ++it;
     for (; it != str.end(); ++it) {
         switch (state) {
-        case START:
+        case Status::START:
             if (*it == '0')
-                state = OCTAL_PREFIX;
+                state = Status::OCTAL_PREFIX;
             else
                 return false;
             break;
-        case OCTAL_PREFIX:
+        case Status::OCTAL_PREFIX:
             if (isOctalDigit(static_cast<unsigned char>(*it)))
-                state = DIGITS;
+                state = Status::DIGITS;
             else
                 return false;
             break;
-        case DIGITS:
+        case Status::DIGITS:
             if (isOctalDigit(static_cast<unsigned char>(*it)))
-                state = DIGITS;
+                state = Status::DIGITS;
             else
-                return _isValidIntegerSuffix(it,str.end());
+                return isValidIntegerSuffixIt(it,str.end());
             break;
         }
     }
-    return state == DIGITS;
+    return state == Status::DIGITS;
 }
 
 bool MathLib::isIntHex(const std::string& str)
 {
-    enum Status {
+    enum class Status {
         START, HEX_0, HEX_X, DIGIT
-    } state = START;
+    } state = Status::START;
     if (str.empty())
         return false;
     std::string::const_iterator it = str.begin();
@@ -887,40 +860,40 @@ bool MathLib::isIntHex(const std::string& str)
         ++it;
     for (; it != str.end(); ++it) {
         switch (state) {
-        case START:
+        case Status::START:
             if (*it == '0')
-                state = HEX_0;
+                state = Status::HEX_0;
             else
                 return false;
             break;
-        case HEX_0:
+        case Status::HEX_0:
             if (*it == 'x' || *it == 'X')
-                state = HEX_X;
+                state = Status::HEX_X;
             else
                 return false;
             break;
-        case HEX_X:
+        case Status::HEX_X:
             if (isxdigit(static_cast<unsigned char>(*it)))
-                state = DIGIT;
+                state = Status::DIGIT;
             else
                 return false;
             break;
-        case DIGIT:
+        case Status::DIGIT:
             if (isxdigit(static_cast<unsigned char>(*it)))
-                ; //  state = DIGIT;
+                ; //  state = Status::DIGIT;
             else
-                return _isValidIntegerSuffix(it,str.end());
+                return isValidIntegerSuffixIt(it,str.end());
             break;
         }
     }
-    return DIGIT==state;
+    return Status::DIGIT == state;
 }
 
 bool MathLib::isFloatHex(const std::string& str)
 {
-    enum Status {
+    enum class Status {
         START, HEX_0, HEX_X, WHOLE_NUMBER_DIGIT, POINT, FRACTION, EXPONENT_P, EXPONENT_SIGN, EXPONENT_DIGITS, EXPONENT_SUFFIX
-    } state = START;
+    } state = Status::START;
     if (str.empty())
         return false;
     std::string::const_iterator it = str.begin();
@@ -928,72 +901,72 @@ bool MathLib::isFloatHex(const std::string& str)
         ++it;
     for (; it != str.end(); ++it) {
         switch (state) {
-        case START:
+        case Status::START:
             if (*it == '0')
-                state = HEX_0;
+                state = Status::HEX_0;
             else
                 return false;
             break;
-        case HEX_0:
+        case Status::HEX_0:
             if (*it == 'x' || *it == 'X')
-                state = HEX_X;
+                state = Status::HEX_X;
             else
                 return false;
             break;
-        case HEX_X:
+        case Status::HEX_X:
             if (isxdigit(static_cast<unsigned char>(*it)))
-                state = WHOLE_NUMBER_DIGIT;
+                state = Status::WHOLE_NUMBER_DIGIT;
             else if (*it == '.')
-                state = POINT;
+                state = Status::POINT;
             else
                 return false;
             break;
-        case WHOLE_NUMBER_DIGIT:
+        case Status::WHOLE_NUMBER_DIGIT:
             if (isxdigit(static_cast<unsigned char>(*it)))
-                ; // state = WHOLE_NUMBER_DIGITS;
+                ; // state = Status::WHOLE_NUMBER_DIGITS;
             else if (*it=='.')
-                state = FRACTION;
+                state = Status::FRACTION;
             else if (*it=='p' || *it=='P')
-                state = EXPONENT_P;
+                state = Status::EXPONENT_P;
             else
                 return false;
             break;
-        case POINT:
-        case FRACTION:
+        case Status::POINT:
+        case Status::FRACTION:
             if (isxdigit(static_cast<unsigned char>(*it)))
-                state=FRACTION;
+                state = Status::FRACTION;
             else if (*it == 'p' || *it == 'P')
-                state = EXPONENT_P;
+                state = Status::EXPONENT_P;
             else
                 return false;
             break;
-        case EXPONENT_P:
+        case Status::EXPONENT_P:
             if (isdigit(static_cast<unsigned char>(*it)))
-                state = EXPONENT_DIGITS;
+                state = Status::EXPONENT_DIGITS;
             else if (*it == '+' || *it == '-')
-                state = EXPONENT_SIGN;
+                state = Status::EXPONENT_SIGN;
             else
                 return false;
             break;
-        case EXPONENT_SIGN:
+        case Status::EXPONENT_SIGN:
             if (isdigit(static_cast<unsigned char>(*it)))
-                state = EXPONENT_DIGITS;
+                state = Status::EXPONENT_DIGITS;
             else
                 return false;
             break;
-        case EXPONENT_DIGITS:
+        case Status::EXPONENT_DIGITS:
             if (isdigit(static_cast<unsigned char>(*it)))
-                ; //  state = EXPONENT_DIGITS;
+                ; //  state = Status::EXPONENT_DIGITS;
             else if (*it == 'f' || *it == 'F' || *it == 'l' || *it == 'L')
-                state = EXPONENT_SUFFIX;
+                state = Status::EXPONENT_SUFFIX;
             else
                 return false;
             break;
-        case EXPONENT_SUFFIX:
+        case Status::EXPONENT_SUFFIX:
             return false;
         }
     }
-    return (EXPONENT_DIGITS==state) || (EXPONENT_SUFFIX == state);
+    return (Status::EXPONENT_DIGITS == state) || (Status::EXPONENT_SUFFIX == state);
 }
 
 
@@ -1008,9 +981,9 @@ bool MathLib::isFloatHex(const std::string& str)
  **/
 bool MathLib::isBin(const std::string& str)
 {
-    enum Status {
+    enum class Status {
         START, GNU_BIN_PREFIX_0, GNU_BIN_PREFIX_B, DIGIT
-    } state = START;
+    } state = Status::START;
     if (str.empty())
         return false;
     std::string::const_iterator it = str.begin();
@@ -1018,40 +991,40 @@ bool MathLib::isBin(const std::string& str)
         ++it;
     for (; it != str.end(); ++it) {
         switch (state) {
-        case START:
+        case Status::START:
             if (*it == '0')
-                state = GNU_BIN_PREFIX_0;
+                state = Status::GNU_BIN_PREFIX_0;
             else
                 return false;
             break;
-        case GNU_BIN_PREFIX_0:
+        case Status::GNU_BIN_PREFIX_0:
             if (*it == 'b' || *it == 'B')
-                state = GNU_BIN_PREFIX_B;
+                state = Status::GNU_BIN_PREFIX_B;
             else
                 return false;
             break;
-        case GNU_BIN_PREFIX_B:
+        case Status::GNU_BIN_PREFIX_B:
             if (*it == '0' || *it == '1')
-                state = DIGIT;
+                state = Status::DIGIT;
             else
                 return false;
             break;
-        case DIGIT:
+        case Status::DIGIT:
             if (*it == '0' || *it == '1')
-                ; //  state = DIGIT;
+                ; //  state = Status::DIGIT;
             else
-                return _isValidIntegerSuffix(it,str.end());
+                return isValidIntegerSuffixIt(it,str.end());
             break;
         }
     }
-    return state == DIGIT;
+    return state == Status::DIGIT;
 }
 
 bool MathLib::isDec(const std::string & str)
 {
-    enum Status {
+    enum class Status {
         START, DIGIT
-    } state = START;
+    } state = Status::START;
     if (str.empty())
         return false;
     std::string::const_iterator it = str.begin();
@@ -1059,21 +1032,21 @@ bool MathLib::isDec(const std::string & str)
         ++it;
     for (; it != str.end(); ++it) {
         switch (state) {
-        case START:
+        case Status::START:
             if (isdigit(static_cast<unsigned char>(*it)))
-                state = DIGIT;
+                state = Status::DIGIT;
             else
                 return false;
             break;
-        case DIGIT:
+        case Status::DIGIT:
             if (isdigit(static_cast<unsigned char>(*it)))
-                state = DIGIT;
+                state = Status::DIGIT;
             else
-                return _isValidIntegerSuffix(it,str.end());
+                return isValidIntegerSuffixIt(it,str.end());
             break;
         }
     }
-    return state == DIGIT;
+    return state == Status::DIGIT;
 }
 
 bool MathLib::isInt(const std::string & str)
@@ -1157,7 +1130,7 @@ std::string MathLib::subtract(const std::string &first, const std::string &secon
     }
 
     if (first == second)
-        return "0.0" ;
+        return "0.0";
 
     double d1 = toDoubleNumber(first);
     double d2 = toDoubleNumber(second);
@@ -1289,7 +1262,9 @@ std::string MathLib::tan(const std::string &tok)
 
 std::string MathLib::abs(const std::string &tok)
 {
-    return toString(std::abs(toDoubleNumber(tok)));
+    if (isNegative(tok))
+        return tok.substr(1, tok.length() - 1);
+    return tok;
 }
 
 bool MathLib::isEqual(const std::string &first, const std::string &second)
@@ -1335,14 +1310,19 @@ bool MathLib::isLessEqual(const std::string &first, const std::string &second)
  **/
 bool MathLib::isNullValue(const std::string &str)
 {
-    if (str.empty() || (!std::isdigit(static_cast<unsigned char>(str[0])) && (str.size() < 1 || (str[0] != '.' && str[0] != '-' && str[0] != '+'))))
+    if (str.empty() || (!std::isdigit(static_cast<unsigned char>(str[0])) && (str[0] != '.' && str[0] != '-' && str[0] != '+')))
         return false; // Has to be a number
 
-    for (size_t i = 0; i < str.size(); i++) {
-        if (std::isdigit(static_cast<unsigned char>(str[i])) && str[i] != '0') // May not contain digits other than 0
+    if (!isInt(str) && !isFloat(str))
+        return false;
+    bool isHex = isIntHex(str) || isFloatHex(str);
+    for (char i : str) {
+        if (std::isdigit(static_cast<unsigned char>(i)) && i != '0') // May not contain digits other than 0
             return false;
-        if (str[i] == 'E' || str[i] == 'e')
+        if (i == 'p' || i == 'P' || (!isHex && (i == 'E' || i == 'e')))
             return true;
+        if (isHex && isxdigit(i) && i != '0')
+            return false;
     }
     return true;
 }

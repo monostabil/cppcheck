@@ -1,23 +1,24 @@
 /*
-* Cppcheck - A tool for static C/C++ code analysis
-* Copyright (C) 2007-2018 Cppcheck team.
-*
-* This program is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You should have received a copy of the GNU General Public License
-* along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*/
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2021 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #include "analyzerinfo.h"
 
+#include "errorlogger.h"
 #include "path.h"
 #include "utils.h"
 
@@ -43,7 +44,7 @@ static std::string getFilename(const std::string &fullpath)
     return fullpath.substr(pos1,pos2);
 }
 
-void AnalyzerInformation::writeFilesTxt(const std::string &buildDir, const std::list<std::string> &sourcefiles, const std::list<ImportProject::FileSettings> &fileSettings)
+void AnalyzerInformation::writeFilesTxt(const std::string &buildDir, const std::list<std::string> &sourcefiles, const std::string &userDefines, const std::list<ImportProject::FileSettings> &fileSettings)
 {
     std::map<std::string, unsigned int> fileCount;
 
@@ -51,16 +52,14 @@ void AnalyzerInformation::writeFilesTxt(const std::string &buildDir, const std::
     std::ofstream fout(filesTxt);
     for (const std::string &f : sourcefiles) {
         const std::string afile = getFilename(f);
-        if (fileCount.find(afile) == fileCount.end())
-            fileCount[afile] = 0;
-        fout << afile << ".a" << (++fileCount[afile]) << "::" << Path::fromNativeSeparators(f) << '\n';
+        fout << afile << ".a" << (++fileCount[afile]) << "::" << Path::simplifyPath(Path::fromNativeSeparators(f)) << '\n';
+        if (!userDefines.empty())
+            fout << afile << ".a" << (++fileCount[afile]) << ":" << userDefines << ":" << Path::simplifyPath(Path::fromNativeSeparators(f)) << '\n';
     }
 
     for (const ImportProject::FileSettings &fs : fileSettings) {
         const std::string afile = getFilename(fs.filename);
-        if (fileCount.find(afile) == fileCount.end())
-            fileCount[afile] = 0;
-        fout << afile << ".a" << (++fileCount[afile]) << ":" << fs.cfg << ":" << Path::fromNativeSeparators(fs.filename) << std::endl;
+        fout << afile << ".a" << (++fileCount[afile]) << ":" << fs.cfg << ":" << Path::simplifyPath(Path::fromNativeSeparators(fs.filename)) << std::endl;
     }
 }
 
@@ -73,7 +72,7 @@ void AnalyzerInformation::close()
     }
 }
 
-static bool skipAnalysis(const std::string &analyzerInfoFile, unsigned long long checksum, std::list<ErrorLogger::ErrorMessage> *errors)
+static bool skipAnalysis(const std::string &analyzerInfoFile, unsigned long long checksum, std::list<ErrorMessage> *errors)
 {
     tinyxml2::XMLDocument doc;
     const tinyxml2::XMLError error = doc.LoadFile(analyzerInfoFile.c_str());
@@ -126,7 +125,7 @@ std::string AnalyzerInformation::getAnalyzerInfoFile(const std::string &buildDir
     return filename;
 }
 
-bool AnalyzerInformation::analyzeFile(const std::string &buildDir, const std::string &sourcefile, const std::string &cfg, unsigned long long checksum, std::list<ErrorLogger::ErrorMessage> *errors)
+bool AnalyzerInformation::analyzeFile(const std::string &buildDir, const std::string &sourcefile, const std::string &cfg, unsigned long long checksum, std::list<ErrorMessage> *errors)
 {
     if (buildDir.empty() || sourcefile.empty())
         return true;
@@ -148,7 +147,7 @@ bool AnalyzerInformation::analyzeFile(const std::string &buildDir, const std::st
     return true;
 }
 
-void AnalyzerInformation::reportErr(const ErrorLogger::ErrorMessage &msg, bool /*verbose*/)
+void AnalyzerInformation::reportErr(const ErrorMessage &msg, bool /*verbose*/)
 {
     if (mOutputStream.is_open())
         mOutputStream << msg.toXML() << '\n';

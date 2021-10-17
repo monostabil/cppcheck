@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,16 +41,14 @@ class Tokenizer;
 class CPPCHECKLIB CheckBool : public Check {
 public:
     /** @brief This constructor is used when registering the CheckClass */
-    CheckBool() : Check(myName()) {
-    }
+    CheckBool() : Check(myName()) {}
 
     /** @brief This constructor is used when running checks. */
     CheckBool(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
-        : Check(myName(), tokenizer, settings, errorLogger) {
-    }
+        : Check(myName(), tokenizer, settings, errorLogger) {}
 
     /** @brief Run checks against the normal token list */
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) override {
+    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
         CheckBool checkBool(tokenizer, settings, errorLogger);
 
         // Checks
@@ -59,13 +57,6 @@ public:
         checkBool.checkAssignBoolToFloat();
         checkBool.pointerArithBool();
         checkBool.returnValueOfFunctionReturningBool();
-    }
-
-    /** @brief Run checks against the simplified token list */
-    void runSimplifiedChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) override {
-        CheckBool checkBool(tokenizer, settings, errorLogger);
-
-        // Checks
         checkBool.checkComparisonOfFuncReturningBool();
         checkBool.checkComparisonOfBoolWithBool();
         checkBool.checkIncrementBoolean();
@@ -113,12 +104,12 @@ private:
     void comparisonOfBoolWithInvalidComparator(const Token *tok, const std::string &expression);
     void assignBoolToPointerError(const Token *tok);
     void assignBoolToFloatError(const Token *tok);
-    void bitwiseOnBooleanError(const Token *tok, const std::string &varname, const std::string &op);
-    void comparisonOfBoolExpressionWithIntError(const Token *tok, bool n0o1);
+    void bitwiseOnBooleanError(const Token* tok, const std::string& expression, const std::string& op);
+    void comparisonOfBoolExpressionWithIntError(const Token *tok, bool not0or1);
     void pointerArithBoolError(const Token *tok);
     void returnValueBoolError(const Token *tok);
 
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
         CheckBool c(nullptr, settings, errorLogger);
 
         c.assignBoolToPointerError(nullptr);
@@ -127,7 +118,7 @@ private:
         c.comparisonOfTwoFuncsReturningBoolError(nullptr, "func_name1", "func_name2");
         c.comparisonOfBoolWithBoolError(nullptr, "var_name");
         c.incrementBooleanError(nullptr);
-        c.bitwiseOnBooleanError(nullptr, "varname", "&&");
+        c.bitwiseOnBooleanError(nullptr, "expression", "&&");
         c.comparisonOfBoolExpressionWithIntError(nullptr, true);
         c.pointerArithBoolError(nullptr);
         c.comparisonOfBoolWithInvalidComparator(nullptr, "expression");
@@ -138,7 +129,7 @@ private:
         return "Boolean";
     }
 
-    std::string classInfo() const override {
+    std::string classInfo() const OVERRIDE {
         return "Boolean type checks\n"
                "- using increment on boolean\n"
                "- comparison of a boolean expression with an integer other than 0 or 1\n"

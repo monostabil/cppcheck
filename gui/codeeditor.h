@@ -3,33 +3,42 @@
 
 #include <QSyntaxHighlighter>
 #include <QPlainTextEdit>
-#include <QObject>
 #include <QRegularExpression>
 
+class CodeEditorStyle;
 class QPaintEvent;
 class QResizeEvent;
-class QSize;
-class QWidget;
-
-class LineNumberArea;
-
 
 class Highlighter : public QSyntaxHighlighter {
     Q_OBJECT
 
 public:
-    explicit Highlighter(QTextDocument *parent);
+    explicit Highlighter(QTextDocument *parent,
+                         CodeEditorStyle *widgetStyle);
 
     void setSymbols(const QStringList &symbols);
+
+    void setStyle(const CodeEditorStyle &newStyle);
 
 protected:
     void highlightBlock(const QString &text) override;
 
 private:
+    enum RuleRole {
+        Keyword = 1,
+        Class   = 2,
+        Comment = 3,
+        Quote   = 4,
+        Symbol  = 5
+    };
     struct HighlightingRule {
         QRegularExpression pattern;
         QTextCharFormat format;
+        RuleRole ruleRole;
     };
+
+    void applyFormat(HighlightingRule &rule);
+
     QVector<HighlightingRule> mHighlightingRules;
     QVector<HighlightingRule> mHighlightingRulesWithSymbols;
 
@@ -42,6 +51,8 @@ private:
     QTextCharFormat mMultiLineCommentFormat;
     QTextCharFormat mQuotationFormat;
     QTextCharFormat mSymbolFormat;
+
+    CodeEditorStyle *mWidgetStyle;
 };
 
 class CodeEditor : public QPlainTextEdit {
@@ -51,9 +62,11 @@ public:
     explicit CodeEditor(QWidget *parent);
     CodeEditor(const CodeEditor &) = delete;
     CodeEditor &operator=(const CodeEditor &) = delete;
+    ~CodeEditor();
 
     void lineNumberAreaPaintEvent(QPaintEvent *event);
     int lineNumberAreaWidth();
+    void setStyle(const CodeEditorStyle& newStyle);
 
     /**
      * Set source code to show, goto error line and highlight that line.
@@ -62,6 +75,26 @@ public:
      * \param symbols      the related symbols, these are marked
      */
     void setError(const QString &code, int errorLine, const QStringList &symbols);
+
+    /**
+     * Goto another error in existing source file
+     * \param errorLine    line number
+     * \param symbols      the related symbols, these are marked
+     */
+    void setError(int errorLine, const QStringList &symbols);
+
+    void setFileName(const QString &fileName) {
+        mFileName = fileName;
+    }
+
+    QString getFileName() const {
+        return mFileName;
+    }
+
+    void clear() {
+        mFileName.clear();
+        setPlainText(QString());
+    }
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -72,9 +105,14 @@ private slots:
     void updateLineNumberArea(const QRect &, int);
 
 private:
+    QString generateStyleString();
+
+private:
     QWidget *mLineNumberArea;
     Highlighter *mHighlighter;
+    CodeEditorStyle *mWidgetStyle;
     int mErrorPosition;
+    QString mFileName;
 };
 
 

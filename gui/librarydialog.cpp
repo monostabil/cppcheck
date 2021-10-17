@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,13 +20,12 @@
 #include "ui_librarydialog.h"
 #include "libraryaddfunctiondialog.h"
 #include "libraryeditargdialog.h"
+#include "common.h"
 #include "path.h"
 
 #include <QFile>
-#include <QSettings>
 #include <QFileDialog>
 #include <QTextStream>
-#include <QInputDialog>
 #include <QMessageBox>
 
 // TODO: get/compare functions from header
@@ -75,16 +74,15 @@ CppcheckLibraryData::Function *LibraryDialog::currentFunction()
 
 void LibraryDialog::openCfg()
 {
-    const QSettings settings;
-    const QString datadir = settings.value("DATADIR",QString()).toString();
+    const QString datadir = getDataDir();
 
     QString selectedFilter;
     const QString filter(tr("Library files (*.cfg)"));
     const QString selectedFile = QFileDialog::getOpenFileName(this,
-                                 tr("Open library file"),
-                                 datadir,
-                                 filter,
-                                 &selectedFilter);
+                                                              tr("Open library file"),
+                                                              datadir,
+                                                              filter,
+                                                              &selectedFilter);
 
     if (selectedFile.isEmpty())
         return;
@@ -93,7 +91,7 @@ void LibraryDialog::openCfg()
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QMessageBox msg(QMessageBox::Critical,
                         tr("Cppcheck"),
-                        tr("Can not open file %1.").arg(selectedFile),
+                        tr("Cannot open file %1.").arg(selectedFile),
                         QMessageBox::Ok,
                         this);
         msg.exec();
@@ -121,8 +119,8 @@ void LibraryDialog::openCfg()
     mUi->functions->clear();
     for (CppcheckLibraryData::Function &function : mData.functions) {
         mUi->functions->addItem(new FunctionListItem(mUi->functions,
-                                &function,
-                                false));
+                                                     &function,
+                                                     false));
     }
     mUi->sortFunctions->setEnabled(!mData.functions.empty());
     mUi->filter->setEnabled(!mData.functions.empty());
@@ -142,7 +140,7 @@ void LibraryDialog::saveCfg()
     } else {
         QMessageBox msg(QMessageBox::Critical,
                         tr("Cppcheck"),
-                        tr("Can not save file %1.").arg(mFileName),
+                        tr("Cannot save file %1.").arg(mFileName),
                         QMessageBox::Ok,
                         this);
         msg.exec();
@@ -154,9 +152,9 @@ void LibraryDialog::saveCfgAs()
     const QString filter(tr("Library files (*.cfg)"));
     const QString path = Path::getPathFromFilename(mFileName.toStdString()).c_str();
     QString selectedFile = QFileDialog::getSaveFileName(this,
-                           tr("Save the library as"),
-                           path,
-                           filter);
+                                                        tr("Save the library as"),
+                                                        path,
+                                                        filter);
     if (selectedFile.isEmpty())
         return;
 
@@ -262,8 +260,8 @@ void LibraryDialog::sortFunctions(bool sort)
         mUi->functions->clear();
         for (CppcheckLibraryData::Function &function : mData.functions) {
             mUi->functions->addItem(new FunctionListItem(mUi->functions,
-                                    &function,
-                                    selfunction == &function));
+                                                         &function,
+                                                         selfunction == &function));
         }
         if (!mUi->filter->text().isEmpty())
             filterFunctions(mUi->filter->text());
@@ -271,7 +269,7 @@ void LibraryDialog::sortFunctions(bool sort)
     }
 }
 
-void LibraryDialog::filterFunctions(QString filter)
+void LibraryDialog::filterFunctions(const QString& filter)
 {
     QList<QListWidgetItem *> allItems = mUi->functions->findItems(QString(), Qt::MatchContains);
 
@@ -313,15 +311,13 @@ void LibraryDialog::editArg()
         return;
     CppcheckLibraryData::Function::Arg &arg = function->args[mUi->arguments->row(mUi->arguments->selectedItems().first())];
 
-    LibraryEditArgDialog *d = new LibraryEditArgDialog(0, arg);
-    if (d->exec() == QDialog::Accepted) {
+    LibraryEditArgDialog d(nullptr, arg);
+    if (d.exec() == QDialog::Accepted) {
         unsigned number = arg.nr;
-        arg = d->getArg();
+        arg = d.getArg();
         arg.nr = number;
         mUi->arguments->selectedItems().first()->setText(getArgText(arg));
     }
-
-    delete d;
     mUi->buttonSave->setEnabled(true);
 }
 

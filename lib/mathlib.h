@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,7 +40,7 @@ public:
     private:
         long long mIntValue;
         double mDoubleValue;
-        enum { INT, LONG, LONGLONG, FLOAT } mType;
+        enum class Type { INT, LONG, LONGLONG, FLOAT } mType;
         bool mIsUnsigned;
 
         void promote(const value &v);
@@ -49,10 +49,10 @@ public:
         explicit value(const std::string &s);
         std::string str() const;
         bool isInt() const {
-            return mType != FLOAT;
+            return mType != Type::FLOAT;
         }
         bool isFloat() const {
-            return mType == FLOAT;
+            return mType == Type::FLOAT;
         }
 
         double getDoubleValue() const {
@@ -125,11 +125,7 @@ public:
      */
     static bool isOctalDigit(char c);
 
-    /**
-     * \param[in] str character literal
-     * @return Number of internal representation of the character literal
-     * */
-    static MathLib::bigint characterLiteralToLongNumber(const std::string& str);
+    static unsigned int encodeMultiChar(const std::string& str);
 
     /**
      * \param[in] iCode Code being considered
@@ -157,7 +153,7 @@ MathLib::value operator^(const MathLib::value &v1, const MathLib::value &v2);
 MathLib::value operator<<(const MathLib::value &v1, const MathLib::value &v2);
 MathLib::value operator>>(const MathLib::value &v1, const MathLib::value &v2);
 
-template<> CPPCHECKLIB std::string MathLib::toString(double value); // Declare specialization to avoid linker problems
+template<> CPPCHECKLIB std::string MathLib::toString<double>(double value); // Declare specialization to avoid linker problems
 
 /// @}
 //---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,12 @@
 //---------------------------------------------------------------------------
 
 #include "check.h"
+#include "errorlogger.h"
 #include "valueflow.h"
+
+#include <map>
+
+class Function;
 
 /// @addtogroup Core
 /// @{
@@ -31,85 +36,105 @@
 
 /** @brief Whole program analysis (ctu=Cross Translation Unit) */
 namespace CTU {
-    class FileInfo : public Check::FileInfo {
+    class CPPCHECKLIB FileInfo : public Check::FileInfo {
     public:
-        std::string toString() const override;
+        enum class InvalidValueType { null, uninit, bufferOverflow };
+
+        std::string toString() const OVERRIDE;
 
         struct Location {
             Location() = default;
             Location(const Tokenizer *tokenizer, const Token *tok);
-            Location(const std::string &fileName, unsigned int linenr) : fileName(fileName), linenr(linenr) {}
+            Location(const std::string &fileName, nonneg int lineNumber, nonneg int column) : fileName(fileName), lineNumber(lineNumber), column(column) {}
             std::string fileName;
-            unsigned int linenr;
+            nonneg int lineNumber;
+            nonneg int column;
         };
 
         struct UnsafeUsage {
             UnsafeUsage() = default;
-            UnsafeUsage(const std::string &functionId, unsigned int argnr, const std::string &argumentName, const Location &location) : functionId(functionId), argnr(argnr), argumentName(argumentName), location(location) {}
-            std::string functionId;
-            unsigned int argnr;
-            std::string argumentName;
+            UnsafeUsage(const std::string &myId, nonneg int myArgNr, const std::string &myArgumentName, const Location &location, MathLib::bigint value) : myId(myId), myArgNr(myArgNr), myArgumentName(myArgumentName), location(location), value(value) {}
+            std::string myId;
+            nonneg int myArgNr;
+            std::string myArgumentName;
             Location location;
+            MathLib::bigint value;
             std::string toString() const;
         };
 
-        struct FunctionCall {
-            std::string functionId;
-            std::string functionName;
-            std::string argumentExpression;
-            unsigned int argnr;
-            long long argvalue;
-            ValueFlow::Value::ValueType valueType;
+        class CallBase {
+        public:
+            CallBase() = default;
+            CallBase(const std::string &callId, int callArgNr, const std::string &callFunctionName, const Location &loc)
+                : callId(callId), callArgNr(callArgNr), callFunctionName(callFunctionName), location(loc)
+            {}
+            CallBase(const Tokenizer *tokenizer, const Token *callToken);
+            virtual ~CallBase() {}
+            std::string callId;
+            int callArgNr;
+            std::string callFunctionName;
             Location location;
+        protected:
+            std::string toBaseXmlString() const;
+            bool loadBaseFromXml(const tinyxml2::XMLElement *xmlElement);
         };
 
-        struct NestedCall {
+        class FunctionCall : public CallBase {
+        public:
+            std::string callArgumentExpression;
+            MathLib::bigint callArgValue;
+            ValueFlow::Value::ValueType callValueType;
+            std::vector<ErrorMessage::FileLocation> callValuePath;
+            bool warning;
+
+            std::string toXmlString() const;
+            bool loadFromXml(const tinyxml2::XMLElement *xmlElement);
+        };
+
+        class NestedCall : public CallBase {
+        public:
             NestedCall() = default;
 
-            NestedCall(const std::string &id_, const std::string &functionName_, unsigned int argnr_, const std::string &fileName, unsigned int linenr)
-                : id(id_),
-                  functionName(functionName_),
-                  argnr(argnr_),
-                  argnr2(0) {
-                location.fileName = fileName;
-                location.linenr   = linenr;
-            }
+            NestedCall(const std::string &myId, nonneg int myArgNr, const std::string &callId, nonneg int callArgnr, const std::string &callFunctionName, const Location &location)
+                : CallBase(callId, callArgnr, callFunctionName, location),
+                myId(myId),
+                myArgNr(myArgNr) {}
 
-            NestedCall(const Tokenizer *tokenizer, const Scope *scope, unsigned int argnr_, const Token *tok);
+            NestedCall(const Tokenizer *tokenizer, const Function *myFunction, const Token *callToken);
 
-            std::string id;
-            std::string id2;
-            std::string functionName;
-            unsigned int argnr;
-            unsigned int argnr2;
-            Location location;
+            std::string toXmlString() const;
+            bool loadFromXml(const tinyxml2::XMLElement *xmlElement);
+
+            std::string myId;
+            nonneg int myArgNr;
         };
 
         std::list<FunctionCall> functionCalls;
         std::list<NestedCall> nestedCalls;
 
         void loadFromXml(const tinyxml2::XMLElement *xmlElement);
-        std::map<std::string, std::list<NestedCall>> getNestedCallsMap() const;
+        std::map<std::string, std::list<const CallBase *>> getCallsMap() const;
 
-        enum InvalidValueType { null, uninit };
-
-        std::list<ErrorLogger::ErrorMessage::FileLocation> getErrorPath(InvalidValueType invalidValue,
-                const UnsafeUsage &unsafeUsage,
-                const std::map<std::string, std::list<NestedCall>> &nestedCallsMap,
-                const char info[],
-                const FunctionCall * * const functionCallPtr) const;
+        static std::list<ErrorMessage::FileLocation> getErrorPath(InvalidValueType invalidValue,
+                                                                  const UnsafeUsage &unsafeUsage,
+                                                                  const std::map<std::string, std::list<const CallBase *>> &callsMap,
+                                                                  const char info[],
+                                                                  const FunctionCall ** const functionCallPtr,
+                                                                  bool warning);
     };
 
-    std::string toString(const std::list<FileInfo::UnsafeUsage> &unsafeUsage);
+    extern int maxCtuDepth;
 
-    std::string getFunctionId(const Tokenizer *tokenizer, const Function *function);
+    CPPCHECKLIB std::string toString(const std::list<FileInfo::UnsafeUsage> &unsafeUsage);
+
+    CPPCHECKLIB std::string getFunctionId(const Tokenizer *tokenizer, const Function *function);
 
     /** @brief Parse current TU and extract file info */
-    FileInfo *getFileInfo(const Tokenizer *tokenizer);
+    CPPCHECKLIB FileInfo *getFileInfo(const Tokenizer *tokenizer);
 
-    std::list<FileInfo::UnsafeUsage> getUnsafeUsage(const Tokenizer *tokenizer, const Settings *settings, const Check *check, bool (*isUnsafeUsage)(const Check *check, const Token *argtok));
+    CPPCHECKLIB std::list<FileInfo::UnsafeUsage> getUnsafeUsage(const Tokenizer *tokenizer, const Settings *settings, const Check *check, bool (*isUnsafeUsage)(const Check *check, const Token *argtok, MathLib::bigint *value));
 
-    std::list<FileInfo::UnsafeUsage> loadUnsafeUsageListFromXml(const tinyxml2::XMLElement *xmlElement);
+    CPPCHECKLIB std::list<FileInfo::UnsafeUsage> loadUnsafeUsageListFromXml(const tinyxml2::XMLElement *xmlElement);
 }
 
 /// @}

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +20,6 @@
 #define LIBRARYDIALOG_H
 
 #include <QDialog>
-#include <QFile>
 
 #include "cppchecklibrarydata.h"
 
@@ -34,7 +33,7 @@ class LibraryDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit LibraryDialog(QWidget *parent = 0);
+    explicit LibraryDialog(QWidget *parent = nullptr);
     LibraryDialog(const LibraryDialog &) = delete;
     ~LibraryDialog();
     LibraryDialog &operator=(const LibraryDialog &) = delete;
@@ -47,7 +46,7 @@ private slots:
     void changeFunction();
     void editArg();
     void editFunctionName(QListWidgetItem*);
-    void filterFunctions(QString);
+    void filterFunctions(const QString&);
     void selectFunction();
     void sortFunctions(bool);
 

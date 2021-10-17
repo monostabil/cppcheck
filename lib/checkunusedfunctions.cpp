@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 //---------------------------------------------------------------------------
 #include "checkunusedfunctions.h"
 
+#include "astutils.h"
 #include "errorlogger.h"
 #include "library.h"
 #include "settings.h"
@@ -32,7 +33,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <istream>
 #include <utility>
 //---------------------------------------------------------------------------
 
@@ -54,8 +54,7 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
     const SymbolDatabase* symbolDatabase = tokenizer.getSymbolDatabase();
 
     // Function declarations..
-    for (std::size_t i = 0; i < symbolDatabase->functionScopes.size(); i++) {
-        const Scope* scope = symbolDatabase->functionScopes[i];
+    for (const Scope* scope : symbolDatabase->functionScopes) {
         const Function* func = scope->function;
         if (!func || !func->token || scope->bodyStart->fileIndex() != 0)
             continue;
@@ -65,13 +64,8 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
             continue;
 
         // Don't care about templates
-        if (tokenizer.isCPP()) {
-            const Token *retDef = func->retDef;
-            while (retDef && retDef->isName())
-                retDef = retDef->previous();
-            if (retDef && retDef->str() == ">")
-                continue;
-        }
+        if (tokenizer.isCPP() && func->templateDef != nullptr)
+            continue;
 
         mFunctionDecl.emplace_back(func);
 
@@ -92,7 +86,13 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
     }
 
     // Function usage..
+    const Token *lambdaEndToken = nullptr;
     for (const Token *tok = tokenizer.tokens(); tok; tok = tok->next()) {
+
+        if (tok == lambdaEndToken)
+            lambdaEndToken = nullptr;
+        else if (!lambdaEndToken && tok->str() == "[")
+            lambdaEndToken = findLambdaEndToken(tok);
 
         // parsing of library code to find called functions
         if (settings->library.isexecutableblock(FileName, tok->str())) {
@@ -193,10 +193,14 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
 
         const Token *funcname = nullptr;
 
-        if (tok->scope()->isExecutable() && Token::Match(tok, "%name% (")) {
+        if ((lambdaEndToken || tok->scope()->isExecutable()) && Token::Match(tok, "%name% (")) {
             funcname = tok;
-        } else if (tok->scope()->isExecutable() && Token::Match(tok, "%name% <") && Token::simpleMatch(tok->linkAt(1), "> (")) {
+        } else if ((lambdaEndToken || tok->scope()->isExecutable()) && Token::Match(tok, "%name% <") && Token::simpleMatch(tok->linkAt(1), "> (")) {
             funcname = tok;
+        } else if (Token::Match(tok, "< %name%") && tok->link()) {
+            funcname = tok->next();
+            while (Token::Match(funcname, "%name% :: %name%"))
+                funcname = funcname->tokAt(2);
         } else if (Token::Match(tok, "[;{}.,()[=+-/|!?:]")) {
             funcname = tok->next();
             if (funcname && funcname->str() == "&")
@@ -223,7 +227,7 @@ void CheckUnusedFunctions::parseTokens(const Tokenizer &tokenizer, const char Fi
         }
 
         if (funcname) {
-            FunctionUsage &func = mFunctions[ funcname->str()];
+            FunctionUsage &func = mFunctions[funcname->str()];
             const std::string& called_from_file = tokenizer.list.getSourceFilePath();
 
             if (func.filename.empty() || func.filename == "+" || func.filename != called_from_file)
@@ -281,7 +285,7 @@ static bool isOperatorFunction(const std::string & funcName)
     };
 
 
-    return std::find(additionalOperators.begin(), additionalOperators.end(), funcName.substr(operatorPrefix.length())) != additionalOperators.end();;
+    return std::find(additionalOperators.begin(), additionalOperators.end(), funcName.substr(operatorPrefix.length())) != additionalOperators.end();
 }
 
 
@@ -305,32 +309,32 @@ bool CheckUnusedFunctions::check(ErrorLogger * const errorLogger, const Settings
                 filename = func.filename;
             unusedFunctionError(errorLogger, filename, func.lineNumber, it->first);
             errors = true;
-        } else if (! func.usedOtherFile) {
+        } else if (!func.usedOtherFile) {
             /** @todo add error message "function is only used in <file> it can be static" */
             /*
-            std::ostringstream errmsg;
-            errmsg << "The function '" << it->first << "' is only used in the file it was declared in so it should have local linkage.";
-            mErrorLogger->reportErr( errmsg.str() );
-            errors = true;
-            */
+               std::ostringstream errmsg;
+               errmsg << "The function '" << it->first << "' is only used in the file it was declared in so it should have local linkage.";
+               mErrorLogger->reportErr( errmsg.str() );
+               errors = true;
+             */
         }
     }
     return errors;
 }
 
 void CheckUnusedFunctions::unusedFunctionError(ErrorLogger * const errorLogger,
-        const std::string &filename, unsigned int lineNumber,
-        const std::string &funcname)
+                                               const std::string &filename, unsigned int lineNumber,
+                                               const std::string &funcname)
 {
-    std::list<ErrorLogger::ErrorMessage::FileLocation> locationList;
+    std::list<ErrorMessage::FileLocation> locationList;
     if (!filename.empty()) {
-        ErrorLogger::ErrorMessage::FileLocation fileLoc;
+        ErrorMessage::FileLocation fileLoc;
         fileLoc.setfile(filename);
         fileLoc.line = lineNumber;
         locationList.push_back(fileLoc);
     }
 
-    const ErrorLogger::ErrorMessage errmsg(locationList, emptyString, Severity::style, "$symbol:" + funcname + "\nThe function '$symbol' is never used.", "unusedFunction", CWE561, false);
+    const ErrorMessage errmsg(locationList, emptyString, Severity::style, "$symbol:" + funcname + "\nThe function '$symbol' is never used.", "unusedFunction", CWE561, Certainty::normal);
     if (errorLogger)
         errorLogger->reportErr(errmsg);
     else
@@ -339,7 +343,7 @@ void CheckUnusedFunctions::unusedFunctionError(ErrorLogger * const errorLogger,
 
 Check::FileInfo *CheckUnusedFunctions::getFileInfo(const Tokenizer *tokenizer, const Settings *settings) const
 {
-    if (!settings->isEnabled(Settings::UNUSED_FUNCTION))
+    if (!settings->checks.isEnabled(Checks::unusedFunction))
         return nullptr;
     if (settings->jobs == 1 && settings->buildDir.empty())
         instance.parseTokens(*tokenizer, tokenizer->list.getFiles().front().c_str(), settings);
@@ -355,19 +359,18 @@ bool CheckUnusedFunctions::analyseWholeProgram(const CTU::FileInfo *ctu, const s
 
 CheckUnusedFunctions::FunctionDecl::FunctionDecl(const Function *f)
     : functionName(f->name()), lineNumber(f->token->linenr())
-{
-}
+{}
 
 std::string CheckUnusedFunctions::analyzerInfo() const
 {
     std::ostringstream ret;
-    for (std::list<FunctionDecl>::const_iterator it = mFunctionDecl.begin(); it != mFunctionDecl.end(); ++it) {
+    for (const FunctionDecl &functionDecl : mFunctionDecl) {
         ret << "    <functiondecl"
-            << " functionName=\"" << ErrorLogger::toxml(it->functionName) << '\"'
-            << " lineNumber=\"" << it->lineNumber << "\"/>\n";
+            << " functionName=\"" << ErrorLogger::toxml(functionDecl.functionName) << '\"'
+            << " lineNumber=\"" << functionDecl.lineNumber << "\"/>\n";
     }
-    for (std::set<std::string>::const_iterator it = mFunctionCalls.begin(); it != mFunctionCalls.end(); ++it) {
-        ret << "    <functioncall functionName=\"" << ErrorLogger::toxml(*it) << "\"/>\n";
+    for (const std::string &fc : mFunctionCalls) {
+        ret << "    <functioncall functionName=\"" << ErrorLogger::toxml(fc) << "\"/>\n";
     }
     return ret.str();
 }

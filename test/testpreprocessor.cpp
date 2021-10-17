@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,13 +40,13 @@ public:
     TestPreprocessor()
         : TestFixture("TestPreprocessor")
         , preprocessor0(settings0, this) {
-        settings0.addEnabled("information");
+        settings0.severity.enable(Severity::information);
     }
 
     class OurPreprocessor : public Preprocessor {
     public:
 
-        static std::string expandMacros(const char code[], ErrorLogger *errorLogger = 0) {
+        static std::string expandMacros(const char code[], ErrorLogger *errorLogger = nullptr) {
             std::istringstream istr(code);
             simplecpp::OutputList outputList;
             std::vector<std::string> files;
@@ -69,7 +69,7 @@ private:
     Settings settings0;
     Preprocessor preprocessor0;
 
-    void run() override {
+    void run() OVERRIDE {
 
         // The bug that started the whole work with the new preprocessor
         TEST_CASE(Bug2190219);
@@ -81,6 +81,7 @@ private:
         TEST_CASE(error5);
         TEST_CASE(error6);
         TEST_CASE(error7);
+        TEST_CASE(error8); // #10170 -> previous #if configurations
 
         TEST_CASE(setPlatformInfo);
 
@@ -220,6 +221,7 @@ private:
         TEST_CASE(getConfigs7e);
         TEST_CASE(getConfigs8);  // #if A==1  => cfg: A=1
         TEST_CASE(getConfigs10); // #5139
+        TEST_CASE(getConfigs11); // #9832 - include guards
         TEST_CASE(getConfigsError);
 
         TEST_CASE(getConfigsD1);
@@ -246,8 +248,6 @@ private:
         TEST_CASE(testDirectiveIncludeTypes);
         TEST_CASE(testDirectiveIncludeLocations);
         TEST_CASE(testDirectiveIncludeComments);
-
-        TEST_CASE(testSameLine);  // #7912
     }
 
     void preprocess(const char* code, std::map<std::string, std::string>& actual, const char filename[] = "file.c") {
@@ -260,18 +260,17 @@ private:
         preprocessor0.simplifyPragmaAsm(&tokens);
         const std::set<std::string> configs(preprocessor0.getConfigs(tokens));
         preprocessor0.setDirectives(tokens);
-        for (std::set<std::string>::const_iterator it = configs.begin(); it != configs.end(); ++it) {
+        for (const std::string & config : configs) {
             try {
-                const std::string &cfgcode = preprocessor0.getcode(tokens, *it, files, std::string(code).find("#file") != std::string::npos);
-                actual[*it] = cfgcode;
+                const std::string &cfgcode = preprocessor0.getcode(tokens, config, files, std::string(code).find("#file") != std::string::npos);
+                actual[config] = cfgcode;
             } catch (const simplecpp::Output &) {
-                actual[*it] = "";
-            } catch (...) {
-            }
+                actual[config] = "";
+            } catch (...) {}
         }
     }
 
-    std::string getConfigsStr(const char filedata[], const char *arg=NULL) {
+    std::string getConfigsStr(const char filedata[], const char *arg = nullptr) {
         Settings settings;
         if (arg && std::strncmp(arg,"-D",2)==0)
             settings.userDefines = arg + 2;
@@ -284,8 +283,8 @@ private:
         tokens.removeComments();
         const std::set<std::string> configs = preprocessor.getConfigs(tokens);
         std::string ret;
-        for (std::set<std::string>::const_iterator it = configs.begin(); it != configs.end(); ++it)
-            ret += *it + '\n';
+        for (const std::string & config : configs)
+            ret += config + '\n';
         return ret;
     }
 
@@ -429,6 +428,19 @@ private:
         ASSERT_EQUALS("\nB\n", getConfigsStr(filedata));
     }
 
+    void error8() {
+        const char filedata[] = "#ifdef A\n"
+                                "#ifdef B\n"
+                                "#endif\n"
+                                "#else\n"
+                                "#endif\n"
+                                "\n"
+                                "#ifndef C\n"
+                                "#error aa\n"
+                                "#endif";
+        ASSERT_EQUALS("A;B;C\nA;C\nC\n", getConfigsStr(filedata));
+    }
+
     void setPlatformInfo() {
         Settings settings;
         Preprocessor preprocessor(settings, this);
@@ -492,7 +504,7 @@ private:
         preprocess(filedata, actual);
 
         // Expected configurations: "" and "ABC"
-        ASSERT_EQUALS(2, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(2, actual.size());
         ASSERT_EQUALS("\n\n\nint main ( ) { }", actual[""]);
         ASSERT_EQUALS("\n#line 1 \"abc.h\"\nclass A { } ;\n#line 4 \"file.c\"\n int main ( ) { }", actual["ABC"]);
     }
@@ -977,7 +989,6 @@ private:
         }
 
         {
-            /* TODO: What to do here? since there are syntax error simplecpp outputs ""
             const char filedata[] = "#define BC(b, c...) 0##b * 0##c\n"
                                     "#define ABC(a, b...) a + BC(b)\n"
                                     "\n"
@@ -985,8 +996,7 @@ private:
                                     "ABC(2,3);\n"
                                     "ABC(4,5,6);\n";
 
-            ASSERT_EQUALS("\n\n\n1 + 0 * 0;\n2 + 03 * 0;\n4 + 05 * 06;", OurPreprocessor::expandMacros(filedata));
-            */
+            ASSERT_EQUALS("\n\n\n1 + 0 * 0 ;\n2 + 03 * 0 ;\n4 + 05 * 06 ;", OurPreprocessor::expandMacros(filedata));
         }
 
         {
@@ -1130,10 +1140,9 @@ private:
     }
 
     void macro_NULL() const {
-        // Let the tokenizer handle NULL.
         // See ticket #4482 - UB when passing NULL to variadic function
         ASSERT_EQUALS("\n0", OurPreprocessor::expandMacros("#define null 0\nnull"));
-        // TODO ASSERT_EQUALS("\nNULL", OurPreprocessor::expandMacros("#define NULL 0\nNULL"));
+        TODO_ASSERT_EQUALS("\nNULL", "\n0", OurPreprocessor::expandMacros("#define NULL 0\nNULL")); // TODO: Let the tokenizer handle NULL?
     }
 
     void string1() {
@@ -1147,7 +1156,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("int main ( ) { const char * a = \"#define A\" ; }", actual[""]);
     }
 
@@ -1250,7 +1259,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("int main ( )\n{\nconst char * a = \"#include <string>\" ;\nreturn 0 ;\n}", actual[""]);
     }
 
@@ -1276,7 +1285,7 @@ private:
 
             // invalid code ASSERT_EQUALS("\nprintf ( \"hello\" ) ;", actual);
         }
-    */
+     */
     void va_args_3() const {
         const char filedata[] = "#define FRED(...) { fred(__VA_ARGS__); }\n"
                                 "FRED(123)\n";
@@ -1314,7 +1323,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("\nint main ( )\n{\nif ( $'ABCD' == 0 ) ;\nreturn 0 ;\n}", actual[""]);
     }
 
@@ -1378,7 +1387,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("\nvoid f ( )\n{\n}", actual[""]);
     }
 
@@ -1397,7 +1406,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("asm ( )\n;\n\naaa\nasm ( ) ;\n\n\nbbb", actual[""]);
     }
 
@@ -1412,7 +1421,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("asm ( )\n;\n\nbbb", actual[""]);
     }
 
@@ -1427,7 +1436,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(2, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(2, actual.size());
         const std::string expected("void f ( ) {\n\n\n}");
         ASSERT_EQUALS(expected, actual[""]);
         ASSERT_EQUALS(expected, actual["A"]);
@@ -1538,7 +1547,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("\nvoid f ( ) {\n$g $( ) ;\n}", actual[""]);
         ASSERT_EQUALS("", errout.str());
     }
@@ -1556,7 +1565,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(2, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(2, actual.size());
         ASSERT_EQUALS("\n\n\n\n\n$20", actual[""]);
         ASSERT_EQUALS("\n\n\n\n\n$10", actual["A"]);
         ASSERT_EQUALS("", errout.str());
@@ -1577,7 +1586,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("", actual[""]);
         ASSERT_EQUALS("[file.c:6]: (error) failed to expand 'BC', Wrong number of parameters for macro 'BC'.\n", errout.str());
     }
@@ -1594,7 +1603,7 @@ private:
         preprocess(filedata, actual);
 
         // Compare results..
-        ASSERT_EQUALS(1, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("\nvoid f ( )\n{\n$printf $( \"\\n\" $) ;\n}", actual[""]);
         ASSERT_EQUALS("", errout.str());
     }
@@ -1614,7 +1623,7 @@ private:
         // Compare results..
         ASSERT_EQUALS("", actual[""]);
         ASSERT_EQUALS("\nA\n\n\nA", actual["ABC"]);
-        ASSERT_EQUALS(2, static_cast<unsigned int>(actual.size()));
+        ASSERT_EQUALS(2, actual.size());
     }
 
     void define_if1() {
@@ -1901,17 +1910,9 @@ private:
         // cases should be fixed whenever this other bug is fixed
         ASSERT_EQUALS(2U, actual.size());
 
-        if (actual.find("A") == actual.end()) {
-            ASSERT_EQUALS("A is checked", "failed");
-        } else {
-            ASSERT_EQUALS("A is checked", "A is checked");
-        }
+        ASSERT_EQUALS_MSG(true, (actual.find("A") != actual.end()), "A is expected to be checked but it was not checked");
 
-        if (actual.find("A;A;B") != actual.end()) {
-            ASSERT_EQUALS("A;A;B is NOT checked", "failed");
-        } else {
-            ASSERT_EQUALS("A;A;B is NOT checked", "A;A;B is NOT checked");
-        }
+        ASSERT_EQUALS_MSG(true, (actual.find("A;A;B") == actual.end()), "A;A;B is expected to NOT be checked but it was checked");
     }
 
     void invalid_define_1() {
@@ -1928,7 +1929,7 @@ private:
         Preprocessor::missingIncludeFlag = false;
         Settings settings;
         settings.inlineSuppressions = true;
-        settings.addEnabled("all");
+        settings.severity.fill();
         Preprocessor preprocessor(settings, this);
 
         std::istringstream src("// cppcheck-suppress missingInclude\n"
@@ -2133,6 +2134,16 @@ private:
         ASSERT_EQUALS("\n", getConfigsStr(filedata));
     }
 
+    void getConfigs11() { // #9832 - include guards
+        const char filedata[] = "#file \"test.h\"\n"
+                                "#if !defined(test_h)\n"
+                                "#define test_h\n"
+                                "123\n"
+                                "#endif\n"
+                                "#endfile\n";
+        ASSERT_EQUALS("\n", getConfigsStr(filedata));
+    }
+
     void getConfigsError() {
         const char filedata1[] = "#ifndef X\n"
                                  "#error \"!X\"\n"
@@ -2144,7 +2155,7 @@ private:
                                  "#error \"!Y\"\n"
                                  "#endif\n"
                                  "#endif\n";
-        ASSERT_EQUALS("\nX\nY\n", getConfigsStr(filedata2));
+        ASSERT_EQUALS("\nX;Y\nY\n", getConfigsStr(filedata2));
     }
 
     void getConfigsD1() {
@@ -2372,20 +2383,6 @@ private:
         preprocessor.dump(ostr);
         ASSERT_EQUALS(dumpdata, ostr.str());
     }
-
-    void testSameLine() { // Ticket #7912
-        const char code[] = "#line 1 \"bench/btl/libs/BLAS/blas_interface_impl.hh\" \n"
-                            "template < > class blas_interface < float > : public c_interface_base < float > \n"
-                            "{ } ;\n"
-                            "#line 1 \"bench/btl/libs/BLAS/blas_interface_impl.hh\" \n"
-                            "template < > class blas_interface < double > : public c_interface_base < double > \n"
-                            "{ } ;";
-        const char exp[]  = "template < > class blas_interface < float > : public c_interface_base < float >\n"
-                            "{ } ; template < > class blas_interface < double > : public c_interface_base < double > { } ;";
-        Preprocessor preprocessor(settings0, this);
-        ASSERT_EQUALS(exp, preprocessor.getcode(code, "", "test.cpp"));
-    }
-
 };
 
 REGISTER_TEST(TestPreprocessor)

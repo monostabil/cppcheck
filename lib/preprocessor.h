@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 
 #include "config.h"
 
+#include <atomic>
 #include <simplecpp.h>
 #include <istream>
 #include <list>
@@ -84,12 +85,15 @@ public:
     explicit Preprocessor(Settings& settings, ErrorLogger *errorLogger = nullptr);
     virtual ~Preprocessor();
 
-    static bool missingIncludeFlag;
-    static bool missingSystemIncludeFlag;
+    static std::atomic<bool> missingIncludeFlag;
+    static std::atomic<bool> missingSystemIncludeFlag;
 
     void inlineSuppressions(const simplecpp::TokenList &tokens);
 
     void setDirectives(const simplecpp::TokenList &tokens);
+    void setDirectives(const std::list<Directive> &directives) {
+        mDirectives = directives;
+    }
 
     /** list of all directives met while preprocessing file */
     const std::list<Directive> &getDirectives() const {
@@ -98,7 +102,9 @@ public:
 
     std::set<std::string> getConfigs(const simplecpp::TokenList &tokens) const;
 
-    void loadFiles(const simplecpp::TokenList &rawtokens, std::vector<std::string> &files);
+    void handleErrors(const simplecpp::OutputList &outputList, bool throwError);
+
+    bool loadFiles(const simplecpp::TokenList &rawtokens, std::vector<std::string> &files);
 
     void removeComments();
 
@@ -216,6 +222,10 @@ private:
 
     /** filename for cpp/c file - useful when reporting errors */
     std::string mFile0;
+
+    /** simplecpp tracking info */
+    std::list<simplecpp::MacroUsage> mMacroUsage;
+    std::list<simplecpp::IfCond> mIfCond;
 };
 
 /// @}

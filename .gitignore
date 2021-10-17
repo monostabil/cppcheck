@@ -4,6 +4,7 @@
 *.pyc
 cppcheck
 cppcheck.exe
+cppcheck-core.dll
 dmake
 dmake.exe
 reduce
@@ -80,7 +81,6 @@ htmlreport/.tox/
 htmlreport/MANIFEST
 
 # Backup files and stuff from patches
-*.orig
 *.rej
 *~
 
@@ -104,6 +104,20 @@ snap/.snapcraft
 # Manual folder
 man/manual.log
 man/manual.tex
+man/*.pdf
+man/*.html
 
 # CLion
 .idea
+/.metadata/
+cmake-*
+
+# clang tooling temporary files
+.clangd/
+compile_commands.json
+
+# qmake
+/gui/.qmake.stash
+
+#vs code
+.vscode

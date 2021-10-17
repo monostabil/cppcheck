@@ -6,7 +6,7 @@
 #
 # Example usage (variable name must start with lowercase, function name must start with uppercase):
 # $ cppcheck --dump path-to-src/
-# $ python naming.py namingng.py test.c.dump
+# $ python namingng.py test.c.dump
 #
 # JSON format:
 #
@@ -19,7 +19,7 @@
 #                          "uint32_t": "ui32"}
 # }
 #
-# RE_VARNAME, RE_PRIVATE_MEMBER_VARIABE and RE_FUNCTIONNAME are regular expressions to cover hte basic names
+# RE_VARNAME, RE_PRIVATE_MEMBER_VARIABLE and RE_FUNCTIONNAME are regular expressions to cover the basic names
 # In var_prefixes and function_prefixes there are the variable-type/prefix pairs
 
 import cppcheckdata
@@ -27,6 +27,14 @@ import sys
 import re
 import argparse
 import json
+
+
+# Auxiliary class
+class DataStruct:
+    def __init__(self, file, linenr, string):
+        self.file = file
+        self.linenr = linenr
+        self.str = string
 
 
 def reportError(filename, linenr, severity, msg):
@@ -46,6 +54,34 @@ def loadConfig(configfile):
     return data
 
 
+def checkTrueRegex(data, expr, msg, errors):
+    res = re.match(expr, data.str)
+    if res:
+        errors.append(reportError(data.file, data.linenr, 'style', msg))
+
+
+def checkFalseRegex(data, expr, msg, errors):
+    res = re.match(expr, data.str)
+    if not res:
+        errors.append(reportError(data.file, data.linenr, 'style', msg))
+
+
+def evalExpr(conf, exp, mockToken, msgType, errors):
+    if isinstance(conf, dict):
+        if conf[exp][0]:
+            msg = msgType + ' ' + mockToken.str + ' violates naming convention : ' + conf[exp][1]
+            checkTrueRegex(mockToken, exp, msg, errors)
+        elif ~conf[exp][0]:
+            msg = msgType + ' ' + mockToken.str + ' violates naming convention : ' + conf[exp][1]
+            checkFalseRegex(mockToken, exp, msg, errors)
+        else:
+            msg = msgType + ' ' + mockToken.str + ' violates naming convention : ' + conf[exp][0]
+            checkFalseRegex(mockToken, exp, msg, errors)
+    else:
+        msg = msgType + ' ' + mockToken.str + ' violates naming convention'
+        checkFalseRegex(mockToken, exp, msg, errors)
+
+
 def process(dumpfiles, configfile, debugprint=False):
 
     errors = []
@@ -56,13 +92,29 @@ def process(dumpfiles, configfile, debugprint=False):
         if not afile[-5:] == '.dump':
             continue
         print('Checking ' + afile + '...')
-        data = cppcheckdata.parsedump(afile)
+        data = cppcheckdata.CppcheckData(afile)
+
+        # Check File naming
+        if "RE_FILE" in conf and conf["RE_FILE"]:
+            mockToken = DataStruct(afile[:-5], "0", afile[afile.rfind('/') + 1:-5])
+            msgType = 'File name'
+            for exp in conf["RE_FILE"]:
+                evalExpr(conf["RE_FILE"], exp, mockToken, msgType, errors)
+
+        # Check Namespace naming
+        if "RE_NAMESPACE" in conf and conf["RE_NAMESPACE"]:
+            for tk in data.rawTokens:
+                if tk.str == 'namespace':
+                    mockToken = DataStruct(tk.next.file, tk.next.linenr, tk.next.str)
+                    msgType = 'Namespace'
+                    for exp in conf["RE_NAMESPACE"]:
+                        evalExpr(conf["RE_NAMESPACE"], exp, mockToken, msgType, errors)
+
         for cfg in data.configurations:
-            if len(data.configurations) > 1:
-                print('Checking ' + afile + ', config "' + cfg.name + '"...')
-            if conf["RE_VARNAME"]:
+            print('Checking %s, config %s...' % (afile, cfg.name))
+            if "RE_VARNAME" in conf and conf["RE_VARNAME"]:
                 for var in cfg.variables:
-                    if var.nameToken:
+                    if var.nameToken and var.access != 'Global' and var.access != 'Public' and var.access != 'Private':
                         prev = var.nameToken.previous
                         varType = prev.str
                         while "*" in varType and len(varType.replace("*", "")) == 0:
@@ -89,24 +141,49 @@ def process(dumpfiles, configfile, debugprint=False):
                                                     'Variable ' +
                                                     var.nameToken.str +
                                                     ' violates naming convention'))
-                        res = re.match(conf["RE_VARNAME"], var.nameToken.str)
-                        if not res:
-                            errors.append(reportError(var.typeStartToken.file, var.typeStartToken.linenr, 'style', 'Variable ' +
-                                        var.nameToken.str + ' violates naming convention'))
 
-            if conf["RE_PRIVATE_MEMBER_VARIABLE"]:
+                        mockToken = DataStruct(var.typeStartToken.file, var.typeStartToken.linenr, var.nameToken.str)
+                        msgType = 'Variable'
+                        for exp in conf["RE_VARNAME"]:
+                            evalExpr(conf["RE_VARNAME"], exp, mockToken, msgType, errors)
+
+            # Check Private Variable naming
+            if "RE_PRIVATE_MEMBER_VARIABLE" in conf and conf["RE_PRIVATE_MEMBER_VARIABLE"]:
                 # TODO: Not converted yet
                 for var in cfg.variables:
                     if (var.access is None) or var.access != 'Private':
                         continue
-                    res = re.match(conf["RE_PRIVATE_MEMBER_VARIABLE"], var.nameToken.str)
-                    if not res:
-                        errors.append(reportError(var.typeStartToken.file, var.typeStartToken.linenr, 'style', 'Private member variable ' +
-                                    var.nameToken.str + ' violates naming convention'))
+                    mockToken = DataStruct(var.typeStartToken.file, var.typeStartToken.linenr, var.nameToken.str)
+                    msgType = 'Private member variable'
+                    for exp in conf["RE_PRIVATE_MEMBER_VARIABLE"]:
+                        evalExpr(conf["RE_PRIVATE_MEMBER_VARIABLE"], exp, mockToken, msgType, errors)
 
-            if conf["RE_FUNCTIONNAME"]:
+            # Check Public Member Variable naming
+            if "RE_PUBLIC_MEMBER_VARIABLE" in conf and conf["RE_PUBLIC_MEMBER_VARIABLE"]:
+                for var in cfg.variables:
+                    if (var.access is None) or var.access != 'Public':
+                        continue
+                    mockToken = DataStruct(var.typeStartToken.file, var.typeStartToken.linenr, var.nameToken.str)
+                    msgType = 'Public member variable'
+                    for exp in conf["RE_PUBLIC_MEMBER_VARIABLE"]:
+                        evalExpr(conf["RE_PUBLIC_MEMBER_VARIABLE"], exp, mockToken, msgType, errors)
+
+            # Check Global Variable naming
+            if "RE_GLOBAL_VARNAME" in conf and conf["RE_GLOBAL_VARNAME"]:
+                for var in cfg.variables:
+                    if (var.access is None) or var.access != 'Global':
+                        continue
+                    mockToken = DataStruct(var.typeStartToken.file, var.typeStartToken.linenr, var.nameToken.str)
+                    msgType = 'Public member variable'
+                    for exp in conf["RE_GLOBAL_VARNAME"]:
+                        evalExpr(conf["RE_GLOBAL_VARNAME"], exp, mockToken, msgType, errors)
+
+            # Check Functions naming
+            if "RE_FUNCTIONNAME" in conf and conf["RE_FUNCTIONNAME"]:
                 for token in cfg.tokenlist:
                     if token.function:
+                        if token.function.type == 'Constructor' or token.function.type == 'Destructor':
+                            continue
                         retval = token.previous.str
                         prev = token.previous
                         while "*" in retval and len(retval.replace("*", "")) == 0:
@@ -119,10 +196,20 @@ def process(dumpfiles, configfile, debugprint=False):
                             if not token.function.name.startswith(conf["function_prefixes"][retval]):
                                 errors.append(reportError(
                                     token.file, token.linenr, 'style', 'Function ' + token.function.name + ' violates naming convention'))
-                        res = re.match(conf["RE_FUNCTIONNAME"], token.function.name)
-                        if not res:
-                            errors.append(reportError(
-                                token.file, token.linenr, 'style', 'Function ' + token.function.name + ' violates naming convention'))
+                        mockToken = DataStruct(token.file, token.linenr, token.function.name)
+                        msgType = 'Function'
+                        for exp in conf["RE_FUNCTIONNAME"]:
+                            evalExpr(conf["RE_FUNCTIONNAME"], exp, mockToken, msgType, errors)
+
+            # Check Class naming
+            if "RE_CLASS_NAME" in conf and conf["RE_CLASS_NAME"]:
+                for fnc in cfg.functions:
+                    # Check if it is Constructor/Destructor
+                    if fnc.type == 'Constructor' or fnc.type == 'Destructor':
+                        mockToken = DataStruct(fnc.tokenDef.file, fnc.tokenDef.linenr, fnc.name)
+                        msgType = 'Class ' + fnc.type
+                        for exp in conf["RE_CLASS_NAME"]:
+                            evalExpr(conf["RE_CLASS_NAME"], exp, mockToken, msgType, errors)
     return errors
 
 
@@ -135,7 +222,7 @@ if __name__ == "__main__":
     parser.add_argument("--configfile", type=str, default="naming.json",
                         help="Naming check config file")
     parser.add_argument("--verify", action="store_true", default=False,
-                        help="verify this script. Bust be executed in test folder !")
+                        help="verify this script. Must be executed in test folder !")
 
     args = parser.parse_args()
     errors = process(args.dumpfiles, args.configfile, args.debugprint)
@@ -162,4 +249,5 @@ if __name__ == "__main__":
     if len(errors):
         print('Found errors: {}'.format(len(errors)))
         sys.exit(1)
+
     sys.exit(0)

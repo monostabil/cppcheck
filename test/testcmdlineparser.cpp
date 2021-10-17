@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,6 @@
 
 #include <list>
 #include <set>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -35,14 +34,13 @@ class TestCmdlineParser : public TestFixture {
 public:
     TestCmdlineParser()
         : TestFixture("TestCmdlineParser")
-        , defParser(&settings) {
-    }
+        , defParser(&settings) {}
 
 private:
     Settings settings;
     CmdLineParser defParser;
 
-    void run() override {
+    void run() OVERRIDE {
         TEST_CASE(nooptions);
         TEST_CASE(helpshort);
         TEST_CASE(helplong);
@@ -103,10 +101,11 @@ private:
         TEST_CASE(maxConfigsInvalid);
         TEST_CASE(maxConfigsTooSmall);
         TEST_CASE(reportProgressTest); // "Test" suffix to avoid hiding the parent's reportProgress
-        TEST_CASE(stdposix);
         TEST_CASE(stdc99);
         TEST_CASE(stdcpp11);
         TEST_CASE(platform);
+        TEST_CASE(plistEmpty);
+        TEST_CASE(plistDoesNotExist);
         TEST_CASE(suppressionsOld); // TODO: Create and test real suppression file
         TEST_CASE(suppressions);
         TEST_CASE(suppressionsNoFile);
@@ -340,7 +339,7 @@ private:
     void defines2() {
         REDIRECT;
         const char * const argv[] = {"cppcheck", "-D_WIN32", "-DNODEBUG", "file.cpp"};
-        settings.userDefines.clear();;
+        settings.userDefines.clear();
         ASSERT(defParser.parseFromArgs(4, argv));
         ASSERT_EQUALS("_WIN32=1;NODEBUG=1", settings.userDefines);
     }
@@ -469,11 +468,11 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=all", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(settings.isEnabled(Settings::STYLE));
-        ASSERT(settings.isEnabled(Settings::WARNING));
-        ASSERT(settings.isEnabled(Settings::UNUSED_FUNCTION));
-        ASSERT(settings.isEnabled(Settings::MISSING_INCLUDE));
-        ASSERT(!settings.isEnabled(Settings::INTERNAL));
+        ASSERT(settings.severity.isEnabled(Severity::style));
+        ASSERT(settings.severity.isEnabled(Severity::warning));
+        ASSERT(settings.checks.isEnabled(Checks::unusedFunction));
+        ASSERT(settings.checks.isEnabled(Checks::missingInclude));
+        ASSERT(!settings.checks.isEnabled(Checks::internalCheck));
     }
 
     void enabledStyle() {
@@ -481,12 +480,12 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=style", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(settings.isEnabled(Settings::STYLE));
-        ASSERT(settings.isEnabled(Settings::WARNING));
-        ASSERT(settings.isEnabled(Settings::PERFORMANCE));
-        ASSERT(settings.isEnabled(Settings::PORTABILITY));
-        ASSERT(!settings.isEnabled(Settings::UNUSED_FUNCTION));
-        ASSERT(!settings.isEnabled(Settings::MISSING_INCLUDE));
+        ASSERT(settings.severity.isEnabled(Severity::style));
+        ASSERT(settings.severity.isEnabled(Severity::warning));
+        ASSERT(settings.severity.isEnabled(Severity::performance));
+        ASSERT(settings.severity.isEnabled(Severity::portability));
+        ASSERT(!settings.checks.isEnabled(Checks::unusedFunction));
+        ASSERT(!settings.checks.isEnabled(Checks::internalCheck));
     }
 
     void enabledPerformance() {
@@ -494,12 +493,12 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=performance", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(!settings.isEnabled(Settings::STYLE));
-        ASSERT(!settings.isEnabled(Settings::WARNING));
-        ASSERT(settings.isEnabled(Settings::PERFORMANCE));
-        ASSERT(!settings.isEnabled(Settings::PORTABILITY));
-        ASSERT(!settings.isEnabled(Settings::UNUSED_FUNCTION));
-        ASSERT(!settings.isEnabled(Settings::MISSING_INCLUDE));
+        ASSERT(!settings.severity.isEnabled(Severity::style));
+        ASSERT(!settings.severity.isEnabled(Severity::warning));
+        ASSERT(settings.severity.isEnabled(Severity::performance));
+        ASSERT(!settings.severity.isEnabled(Severity::portability));
+        ASSERT(!settings.checks.isEnabled(Checks::unusedFunction));
+        ASSERT(!settings.checks.isEnabled(Checks::missingInclude));
     }
 
     void enabledPortability() {
@@ -507,12 +506,12 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=portability", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(!settings.isEnabled(Settings::STYLE));
-        ASSERT(!settings.isEnabled(Settings::WARNING));
-        ASSERT(!settings.isEnabled(Settings::PERFORMANCE));
-        ASSERT(settings.isEnabled(Settings::PORTABILITY));
-        ASSERT(!settings.isEnabled(Settings::UNUSED_FUNCTION));
-        ASSERT(!settings.isEnabled(Settings::MISSING_INCLUDE));
+        ASSERT(!settings.severity.isEnabled(Severity::style));
+        ASSERT(!settings.severity.isEnabled(Severity::warning));
+        ASSERT(!settings.severity.isEnabled(Severity::performance));
+        ASSERT(settings.severity.isEnabled(Severity::portability));
+        ASSERT(!settings.checks.isEnabled(Checks::unusedFunction));
+        ASSERT(!settings.checks.isEnabled(Checks::missingInclude));
     }
 
     void enabledUnusedFunction() {
@@ -520,7 +519,7 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=unusedFunction", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(settings.isEnabled(Settings::UNUSED_FUNCTION));
+        ASSERT(settings.checks.isEnabled(Checks::unusedFunction));
     }
 
     void enabledMissingInclude() {
@@ -528,7 +527,7 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=missingInclude", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(settings.isEnabled(Settings::MISSING_INCLUDE));
+        ASSERT(settings.checks.isEnabled(Checks::missingInclude));
     }
 
 #ifdef CHECK_INTERNAL
@@ -537,7 +536,7 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=internal", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(settings.isEnabled(Settings::INTERNAL));
+        ASSERT(settings.checks.isEnabled(Checks::internalCheck));
     }
 #endif
 
@@ -546,20 +545,20 @@ private:
         const char * const argv[] = {"cppcheck", "--enable=missingInclude,portability,warning", "file.cpp"};
         settings = Settings();
         ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(!settings.isEnabled(Settings::STYLE));
-        ASSERT(settings.isEnabled(Settings::WARNING));
-        ASSERT(!settings.isEnabled(Settings::PERFORMANCE));
-        ASSERT(settings.isEnabled(Settings::PORTABILITY));
-        ASSERT(!settings.isEnabled(Settings::UNUSED_FUNCTION));
-        ASSERT(settings.isEnabled(Settings::MISSING_INCLUDE));
+        ASSERT(!settings.severity.isEnabled(Severity::style));
+        ASSERT(settings.severity.isEnabled(Severity::warning));
+        ASSERT(!settings.severity.isEnabled(Severity::performance));
+        ASSERT(settings.severity.isEnabled(Severity::portability));
+        ASSERT(!settings.checks.isEnabled(Checks::unusedFunction));
+        ASSERT(settings.checks.isEnabled(Checks::missingInclude));
     }
 
     void inconclusive() {
         REDIRECT;
         const char * const argv[] = {"cppcheck", "--inconclusive"};
-        settings.inconclusive = false;
+        settings.certainty.clear();
         ASSERT(defParser.parseFromArgs(2, argv));
-        ASSERT_EQUALS(true, settings.inconclusive);
+        ASSERT_EQUALS(true, settings.certainty.isEnabled(Certainty::inconclusive));
     }
 
     void errorExitcode() {
@@ -694,14 +693,6 @@ private:
         ASSERT(settings.reportProgress);
     }
 
-    void stdposix() {
-        REDIRECT;
-        const char * const argv[] = {"cppcheck", "--std=posix", "file.cpp"};
-        settings.standards.posix = false;
-        ASSERT(defParser.parseFromArgs(3, argv));
-        ASSERT(settings.standards.posix);
-    }
-
     void stdc99() {
         REDIRECT;
         const char * const argv[] = {"cppcheck", "--std=c99", "file.cpp"};
@@ -724,6 +715,22 @@ private:
         settings.platform(Settings::Unspecified);
         ASSERT(defParser.parseFromArgs(3, argv));
         ASSERT(settings.platformType == Settings::Win64);
+    }
+
+    void plistEmpty() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--plist-output=", "file.cpp"};
+        settings.plistOutput = "";
+        ASSERT(defParser.parseFromArgs(3, argv));
+        ASSERT(settings.plistOutput == "./");
+    }
+
+    void plistDoesNotExist() {
+        REDIRECT;
+        const char * const argv[] = {"cppcheck", "--plist-output=./cppcheck_reports", "file.cpp"};
+        settings.plistOutput = "";
+        // Fails since folder pointed by --plist-output= does not exist
+        ASSERT_EQUALS(false, defParser.parseFromArgs(3, argv));
     }
 
     void suppressionsOld() {
@@ -819,7 +826,7 @@ private:
         const char * const argv[] = {"cppcheck", "--template", "gcc", "file.cpp"};
         settings.templateFormat.clear();
         ASSERT(defParser.parseFromArgs(4, argv));
-        ASSERT_EQUALS("{file}:{line}:{column}: warning: {message} [{id}]\\n{code}", settings.templateFormat);
+        ASSERT_EQUALS("{bold}{file}:{line}:{column}: {magenta}warning:{default} {message} [{id}]{reset}\\n{code}", settings.templateFormat);
     }
 
     void templatesVs() {
@@ -902,9 +909,9 @@ private:
     void showtime() {
         REDIRECT;
         const char * const argv[] = {"cppcheck", "--showtime=summary"};
-        settings.showtime = SHOWTIME_NONE;
+        settings.showtime = SHOWTIME_MODES::SHOWTIME_NONE;
         ASSERT(defParser.parseFromArgs(2, argv));
-        ASSERT(settings.showtime == SHOWTIME_SUMMARY);
+        ASSERT(settings.showtime == SHOWTIME_MODES::SHOWTIME_SUMMARY);
     }
 
     void errorlist1() {
@@ -967,7 +974,7 @@ private:
             ASSERT_EQUALS("src/", parser.getIgnoredPaths()[0]);
             ASSERT_EQUALS("module/", parser.getIgnoredPaths()[1]);
         }
-    */
+     */
     void ignorepaths4() {
         REDIRECT;
         const char * const argv[] = {"cppcheck", "-i", "src", "-i", "module", "file.cpp"};
@@ -986,7 +993,7 @@ private:
             ASSERT_EQUALS(1, parser.getIgnoredPaths().size());
             ASSERT_EQUALS("foo.cpp", parser.getIgnoredPaths()[0]);
         }
-    */
+     */
     void ignorefilepaths2() {
         REDIRECT;
         const char * const argv[] = {"cppcheck", "-isrc/foo.cpp", "file.cpp"};
