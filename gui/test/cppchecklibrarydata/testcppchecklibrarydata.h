@@ -16,8 +16,10 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <QtTest/QtTest>
 #include "cppchecklibrarydata.h"
+
+#include <QObject>
+#include <QString>
 
 class TestCppcheckLibraryData : public QObject {
     Q_OBJECT
@@ -38,10 +40,13 @@ private slots:
     void undefineValid();
     void reflectionValid();
     void markupValid();
+    void containerValid();
+
+    void validateAllCfg();
 
 private:
-    void loadCfgFile(QString filename, CppcheckLibraryData &data, QString &result, bool removeFile = false);
-    void saveCfgFile(QString filename, CppcheckLibraryData &data);
+    static void loadCfgFile(const QString &filename, CppcheckLibraryData &data, QString &res, bool removeFile = false);
+    static void saveCfgFile(const QString &filename, CppcheckLibraryData &data);
 
     CppcheckLibraryData libraryData;
     CppcheckLibraryData fileLibraryData;

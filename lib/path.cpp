@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,29 +19,45 @@
 #if defined(__GNUC__) && (defined(_WIN32) || defined(__CYGWIN__))
 #undef __STRICT_ANSI__
 #endif
+
+//#define LOG_EMACS_MARKER
+
 #include "path.h"
 #include "utils.h"
 
 #include <algorithm>
-#include <cctype>
+#include <cstdio>
 #include <cstdlib>
-#include <fstream>
+#ifdef LOG_EMACS_MARKER
+#include <iostream>
+#endif
+#include <sys/stat.h>
+#include <unordered_set>
+#include <utility>
+
+#include <simplecpp.h>
 
 #ifndef _WIN32
+#include <sys/types.h>
 #include <unistd.h>
 #else
 #include <direct.h>
+#include <windows.h>
 #endif
 #if defined(__CYGWIN__)
 #include <strings.h>
 #endif
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
-#include <simplecpp.h>
 
 /** Is the filesystem case insensitive? */
-static bool caseInsensitiveFilesystem()
+static constexpr bool caseInsensitiveFilesystem()
 {
-#ifdef _WIN32
+#if defined(_WIN32) || (defined(__APPLE__) && defined(__MACH__))
+    // Windows is case insensitive
+    // MacOS is case insensitive by default (also supports case sensitivity)
     return true;
 #else
     // TODO: Non-windows filesystems might be case insensitive
@@ -52,11 +68,11 @@ static bool caseInsensitiveFilesystem()
 std::string Path::toNativeSeparators(std::string path)
 {
 #if defined(_WIN32)
-    const char separ = '/';
-    const char native = '\\';
+    constexpr char separ = '/';
+    constexpr char native = '\\';
 #else
-    const char separ = '\\';
-    const char native = '/';
+    constexpr char separ = '\\';
+    constexpr char native = '/';
 #endif
     std::replace(path.begin(), path.end(), separ, native);
     return path;
@@ -64,15 +80,15 @@ std::string Path::toNativeSeparators(std::string path)
 
 std::string Path::fromNativeSeparators(std::string path)
 {
-    const char nonnative = '\\';
-    const char newsepar = '/';
+    constexpr char nonnative = '\\';
+    constexpr char newsepar = '/';
     std::replace(path.begin(), path.end(), nonnative, newsepar);
     return path;
 }
 
 std::string Path::simplifyPath(std::string originalPath)
 {
-    return simplecpp::simplifyPath(originalPath);
+    return simplecpp::simplifyPath(std::move(originalPath));
 }
 
 std::string Path::getPathFromFilename(const std::string &filename)
@@ -90,39 +106,30 @@ bool Path::sameFileName(const std::string &fname1, const std::string &fname2)
     return caseInsensitiveFilesystem() ? (caseInsensitiveStringCompare(fname1, fname2) == 0) : (fname1 == fname2);
 }
 
-// This wrapper exists because Sun's CC does not allow a static_cast
-// from extern "C" int(*)(int) to int(*)(int).
-static int tolowerWrapper(int c)
-{
-    return std::tolower(c);
-}
-
 std::string Path::removeQuotationMarks(std::string path)
 {
     path.erase(std::remove(path.begin(), path.end(), '\"'), path.end());
     return path;
 }
 
-std::string Path::getFilenameExtension(const std::string &path)
+std::string Path::getFilenameExtension(const std::string &path, bool lowercase)
 {
     const std::string::size_type dotLocation = path.find_last_of('.');
     if (dotLocation == std::string::npos)
         return "";
 
     std::string extension = path.substr(dotLocation);
-    if (caseInsensitiveFilesystem()) {
+    if (lowercase || caseInsensitiveFilesystem()) {
         // on a case insensitive filesystem the case doesn't matter so
         // let's return the extension in lowercase
-        std::transform(extension.begin(), extension.end(), extension.begin(), tolowerWrapper);
+        strTolower(extension);
     }
     return extension;
 }
 
 std::string Path::getFilenameExtensionInLowerCase(const std::string &path)
 {
-    std::string extension = getFilenameExtension(path);
-    std::transform(extension.begin(), extension.end(), extension.begin(), tolowerWrapper);
-    return extension;
+    return getFilenameExtension(path, true);
 }
 
 std::string Path::getCurrentPath()
@@ -136,7 +143,30 @@ std::string Path::getCurrentPath()
 #endif
         return std::string(currentPath);
 
-    return emptyString;
+    return "";
+}
+
+std::string Path::getCurrentExecutablePath(const char* fallback)
+{
+    char buf[4096] = {};
+    bool success{};
+#ifdef _WIN32
+    success = (GetModuleFileNameA(nullptr, buf, sizeof(buf)) < sizeof(buf));
+#elif defined(__APPLE__)
+    uint32_t size = sizeof(buf);
+    success = (_NSGetExecutablePath(buf, &size) == 0);
+#else
+    const char* procPath =
+#ifdef __SVR4 // Solaris
+        "/proc/self/path/a.out";
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
+        "/proc/curproc/file";
+#else // Linux
+        "/proc/self/exe";
+#endif
+    success = (readlink(procPath, buf, sizeof(buf)) != -1);
+#endif
+    return success ? std::string(buf) : std::string(fallback);
 }
 
 bool Path::isAbsolute(const std::string& path)
@@ -148,14 +178,10 @@ bool Path::isAbsolute(const std::string& path)
         return false;
 
     // On Windows, 'C:\foo\bar' is an absolute path, while 'C:foo\bar' is not
-    if (nativePath.compare(0, 2, "\\\\") == 0 || (std::isalpha(nativePath[0]) != 0 && nativePath.compare(1, 2, ":\\") == 0))
-        return true;
+    return startsWith(nativePath, "\\\\") || (std::isalpha(nativePath[0]) != 0 && nativePath.compare(1, 2, ":\\") == 0);
 #else
-    if (!nativePath.empty() && nativePath[0] == '/')
-        return true;
+    return !nativePath.empty() && nativePath[0] == '/';
 #endif
-
-    return false;
 }
 
 std::string Path::getRelativePath(const std::string& absolutePath, const std::vector<std::string>& basePaths)
@@ -169,46 +195,164 @@ std::string Path::getRelativePath(const std::string& absolutePath, const std::ve
 
         if (endsWith(bp,'/'))
             return absolutePath.substr(bp.length());
-        else if (absolutePath.size() > bp.size() && absolutePath[bp.length()] == '/')
+        if (absolutePath.size() > bp.size() && absolutePath[bp.length()] == '/')
             return absolutePath.substr(bp.length() + 1);
     }
     return absolutePath;
 }
 
-bool Path::isC(const std::string &path)
-{
-    // In unix, ".C" is considered C++ file
-    const std::string extension = getFilenameExtension(path);
-    return extension == ".c" ||
-           extension == ".cl";
-}
+static const std::unordered_set<std::string> cpp_src_exts = {
+    ".cpp", ".cxx", ".cc", ".c++", ".tpp", ".txx", ".ipp", ".ixx"
+};
 
-bool Path::isCPP(const std::string &path)
-{
-    const std::string extension = getFilenameExtensionInLowerCase(path);
-    return extension == ".cpp" ||
-           extension == ".cxx" ||
-           extension == ".cc" ||
-           extension == ".c++" ||
-           extension == ".hpp" ||
-           extension == ".hxx" ||
-           extension == ".hh" ||
-           extension == ".tpp" ||
-           extension == ".txx" ||
-           extension == ".ipp" ||
-           extension == ".ixx" ||
-           getFilenameExtension(path) == ".C"; // In unix, ".C" is considered C++ file
-}
+static const std::unordered_set<std::string> c_src_exts = {
+    ".c", ".cl"
+};
+
+static const std::unordered_set<std::string> header_exts = {
+    ".h", ".hpp", ".h++", ".hxx", ".hh"
+};
 
 bool Path::acceptFile(const std::string &path, const std::set<std::string> &extra)
 {
-    return !Path::isHeader(path) && (Path::isCPP(path) || Path::isC(path) || extra.find(getFilenameExtension(path)) != extra.end());
+    bool header = false;
+    return (identify(path, false, &header) != Standards::Language::None && !header) || extra.find(getFilenameExtension(path)) != extra.end();
+}
+
+static bool hasEmacsCppMarker(const char* path)
+{
+    // TODO: identify is called three times for each file
+    // Preprocessor::loadFiles() -> createDUI()
+    // Preprocessor::preprocess() -> createDUI()
+    // TokenList::createTokens() -> TokenList::determineCppC()
+#ifdef LOG_EMACS_MARKER
+    std::cout << path << '\n';
+#endif
+
+    FILE *fp = fopen(path, "rt");
+    if (!fp)
+        return false;
+    std::string buf(128, '\0');
+    {
+        // TODO: read the whole first line only
+        const char * const res = fgets(const_cast<char*>(buf.data()), buf.size(), fp);
+        fclose(fp);
+        fp = nullptr;
+        if (!res)
+            return false; // failed to read file
+    }
+    // TODO: replace with regular expression
+    const auto pos1 = buf.find("-*-");
+    if (pos1 == std::string::npos)
+        return false; // no start marker
+    const auto pos_nl = buf.find_first_of("\r\n");
+    if (pos_nl != std::string::npos && (pos_nl < pos1)) {
+#ifdef LOG_EMACS_MARKER
+        std::cout << path << " - Emacs marker not on the first line" << '\n';
+#endif
+        return false; // not on first line
+    }
+    const auto pos2 = buf.find("-*-", pos1 + 3);
+    // TODO: make sure we have read the whole line before bailing out
+    if (pos2 == std::string::npos) {
+#ifdef LOG_EMACS_MARKER
+        std::cout << path << " - Emacs marker not terminated" << '\n';
+#endif
+        return false; // no end marker
+    }
+#ifdef LOG_EMACS_MARKER
+    std::cout << "Emacs marker: '"  << buf.substr(pos1, (pos2 + 3) - pos1) << "'" << '\n';
+#endif
+    // TODO: support /* */ comments
+    const std::string buf_trim = trim(buf); // trim whitespaces
+    if (buf_trim[0] == '/' && buf_trim[1] == '*') {
+        const auto pos_cmt = buf.find("*/", 2);
+        if (pos_cmt != std::string::npos && pos_cmt < (pos2 + 3))
+        {
+ #ifdef LOG_EMACS_MARKER
+            std::cout << path << " - Emacs marker not contained in C-style comment block: '"  << buf.substr(pos1, (pos2 + 3) - pos1) << "'" << '\n';
+ #endif
+            return false; // not in a comment
+        }
+    }
+    else if (buf_trim[0] != '/' || buf_trim[1] != '/') {
+#ifdef LOG_EMACS_MARKER
+        std::cout << path << " - Emacs marker not in a comment: '"  << buf.substr(pos1, (pos2 + 3) - pos1) << "'" << '\n';
+#endif
+        return false; // not in a comment
+    }
+
+    // there are more variations with lowercase and no whitespaces
+    // -*- C++ -*-
+    // -*- Mode: C++; -*-
+    // -*- Mode: C++; c-basic-offset: 8 -*-
+    std::string marker = trim(buf.substr(pos1 + 3, pos2 - pos1 - 3), " ;");
+    // cut off additional attributes
+    const auto pos_semi = marker.find(';');
+    if (pos_semi != std::string::npos)
+        marker.resize(pos_semi);
+    findAndReplace(marker, "mode:", "");
+    findAndReplace(marker, "Mode:", "");
+    marker = trim(marker);
+    if (marker == "C++" || marker == "c++") {
+        // NOLINTNEXTLINE(readability-simplify-boolean-expr) - TODO: FP
+        return true; // C++ marker found
+    }
+
+    //if (marker == "C" || marker == "c")
+    //    return false;
+#ifdef LOG_EMACS_MARKER
+    std::cout << path << " - unmatched Emacs marker: '"  << marker << "'" << '\n';
+#endif
+
+    return false; // marker is not a C++ one
+}
+
+Standards::Language Path::identify(const std::string &path, bool cppHeaderProbe, bool *header)
+{
+    // cppcheck-suppress uninitvar - TODO: FP
+    if (header)
+        *header = false;
+
+    std::string ext = getFilenameExtension(path);
+    // standard library headers have no extension
+    if (cppHeaderProbe && ext.empty()) {
+        if (hasEmacsCppMarker(path.c_str())) {
+            if (header)
+                *header = true;
+            return Standards::Language::CPP;
+        }
+        return Standards::Language::None;
+    }
+    if (ext == ".C")
+        return Standards::Language::CPP;
+    if (c_src_exts.find(ext) != c_src_exts.end())
+        return Standards::Language::C;
+    // cppcheck-suppress knownConditionTrueFalse - TODO: FP
+    if (!caseInsensitiveFilesystem())
+        strTolower(ext);
+    if (ext == ".h") {
+        if (header)
+            *header = true;
+        if (cppHeaderProbe && hasEmacsCppMarker(path.c_str()))
+            return Standards::Language::CPP;
+        return Standards::Language::C;
+    }
+    if (cpp_src_exts.find(ext) != cpp_src_exts.end())
+        return Standards::Language::CPP;
+    if (header_exts.find(ext) != header_exts.end()) {
+        if (header)
+            *header = true;
+        return Standards::Language::CPP;
+    }
+    return Standards::Language::None;
 }
 
 bool Path::isHeader(const std::string &path)
 {
-    const std::string extension = getFilenameExtensionInLowerCase(path);
-    return (extension.compare(0, 2, ".h") == 0);
+    bool header;
+    (void)identify(path, false, &header);
+    return header;
 }
 
 std::string Path::getAbsoluteFilePath(const std::string& filePath)
@@ -232,9 +376,9 @@ std::string Path::getAbsoluteFilePath(const std::string& filePath)
 std::string Path::stripDirectoryPart(const std::string &file)
 {
 #if defined(_WIN32) && !defined(__MINGW32__)
-    const char native = '\\';
+    constexpr char native = '\\';
 #else
-    const char native = '/';
+    constexpr char native = '/';
 #endif
 
     const std::string::size_type p = file.rfind(native);
@@ -244,8 +388,32 @@ std::string Path::stripDirectoryPart(const std::string &file)
     return file;
 }
 
-bool Path::fileExists(const std::string &file)
+#ifdef _WIN32
+using mode_t = unsigned short;
+#endif
+
+static mode_t file_type(const std::string &path)
 {
-    std::ifstream f(file.c_str());
-    return f.is_open();
+    struct stat file_stat;
+    if (stat(path.c_str(), &file_stat) == -1)
+        return 0;
+    return file_stat.st_mode & S_IFMT;
+}
+
+bool Path::isFile(const std::string &path)
+{
+    return file_type(path) == S_IFREG;
+}
+
+bool Path::isDirectory(const std::string &path)
+{
+    return file_type(path) == S_IFDIR;
+}
+
+std::string Path::join(const std::string& path1, const std::string& path2) {
+    if (path1.empty() || path2.empty())
+        return path1 + path2;
+    if (path2.front() == '/')
+        return path2;
+    return ((path1.back() == '/') ? path1 : (path1 + "/")) + path2;
 }

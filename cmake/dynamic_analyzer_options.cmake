@@ -18,11 +18,18 @@ elseif(ANALYZE_THREAD)
 endif()
 
 if(ANALYZE_UNDEFINED)
-    add_compile_options(-fsanitize=undefined)
+    # TODO: enable signed-integer-overflow
+    add_compile_options(-fsanitize=undefined -fno-sanitize=signed-integer-overflow)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fsanitize=nullability)
+    endif()
     add_compile_options(-fno-sanitize-recover=all)
     add_compile_options(-fno-omit-frame-pointer)
 
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=undefined -fno-sanitize=signed-integer-overflow")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=nullability")
+    endif()
 endif()
 
 if(ANALYZE_DATAFLOW)

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,8 @@
 #define calculateH
 
 #include "mathlib.h"
+#include "errortypes.h"
+#include <limits>
 #include <string>
 
 template<class T>
@@ -35,13 +37,13 @@ inline bool isEqual(double x, double y)
 }
 inline bool isEqual(float x, float y)
 {
-    return isEqual(double{x}, double{y});
+    return isEqual(double(x), double(y));
 }
 
 template<class T>
 bool isZero(T x)
 {
-    return isEqual<T>(x, T(0));
+    return isEqual(x, T(0));
 }
 
 template<class R, class T>
@@ -50,6 +52,9 @@ R calculate(const std::string& s, const T& x, const T& y, bool* error = nullptr)
     auto wrap = [](T z) {
         return R{z};
     };
+    constexpr MathLib::bigint maxBitsShift = sizeof(MathLib::bigint) * 8;
+    // For portability we cannot shift signed integers by 63 bits
+    constexpr MathLib::bigint maxBitsSignedShift = maxBitsShift - 1;
     switch (MathLib::encodeMultiChar(s)) {
     case '+':
         return wrap(x + y);
@@ -58,14 +63,14 @@ R calculate(const std::string& s, const T& x, const T& y, bool* error = nullptr)
     case '*':
         return wrap(x * y);
     case '/':
-        if (isZero(y)) {
+        if (isZero(y) || (std::is_integral<T>{} && std::is_signed<T>{} && isEqual(y, T(-1)) && isEqual(x, std::numeric_limits<T>::min()))) {
             if (error)
                 *error = true;
             return R{};
         }
         return wrap(x / y);
     case '%':
-        if (isZero(y)) {
+        if (isZero(MathLib::bigint(y)) || (std::is_integral<T>{} && std::is_signed<T>{} && isEqual(y, T(-1)) && isEqual(x, std::numeric_limits<T>::min()))) {
             if (error)
                 *error = true;
             return R{};
@@ -82,14 +87,14 @@ R calculate(const std::string& s, const T& x, const T& y, bool* error = nullptr)
     case '<':
         return wrap(x < y);
     case '<<':
-        if (y >= sizeof(MathLib::bigint) * 8 || y < 0 || x < 0) {
+        if (y >= maxBitsSignedShift || y < 0 || x < 0) {
             if (error)
                 *error = true;
             return R{};
         }
         return wrap(MathLib::bigint(x) << MathLib::bigint(y));
     case '>>':
-        if (y >= sizeof(MathLib::bigint) * 8 || y < 0 || x < 0) {
+        if (y >= maxBitsSignedShift || y < 0 || x < 0) {
             if (error)
                 *error = true;
             return R{};
@@ -107,6 +112,8 @@ R calculate(const std::string& s, const T& x, const T& y, bool* error = nullptr)
         return wrap(x >= y);
     case '<=':
         return wrap(x <= y);
+    case '<=>':
+        return wrap(x - y);
     }
     throw InternalError(nullptr, "Unknown operator: " + s);
 }

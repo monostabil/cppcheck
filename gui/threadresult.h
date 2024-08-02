@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,14 +20,21 @@
 #ifndef THREADRESULT_H
 #define THREADRESULT_H
 
-#include <QMutex>
-#include <QObject>
-#include <QStringList>
 #include "color.h"
 #include "errorlogger.h"
-#include "importproject.h"
+#include "filesettings.h"
+
+#include <list>
+#include <mutex>
+#include <string>
+
+#include <QObject>
+#include <QString>
+#include <QStringList>
+#include <QtGlobal>
 
 class ErrorItem;
+class ImportProject;
 
 /// @addtogroup GUI
 /// @{
@@ -39,8 +46,7 @@ class ErrorItem;
 class ThreadResult : public QObject, public ErrorLogger {
     Q_OBJECT
 public:
-    ThreadResult();
-    virtual ~ThreadResult();
+    ThreadResult() = default;
 
     /**
      * @brief Get next unprocessed file
@@ -48,7 +54,7 @@ public:
      */
     QString getNextFile();
 
-    ImportProject::FileSettings getNextFileSettings();
+    void getNextFileSettings(const FileSettings*& fs);
 
     /**
      * @brief Set list of files to check
@@ -75,7 +81,6 @@ public:
      */
     void reportOut(const std::string &outmsg, Color c = Color::Reset) override;
     void reportErr(const ErrorMessage &msg) override;
-    void bughuntingReport(const std::string &str) override;
 
 public slots:
 
@@ -90,6 +95,7 @@ signals:
      * @param value Current progress
      * @param description Description of the current stage
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void progress(int value, const QString& description);
 
     /**
@@ -97,6 +103,7 @@ signals:
      *
      * @param item Error data
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void error(const ErrorItem &item);
 
     /**
@@ -104,6 +111,7 @@ signals:
      *
      * @param logline Log line
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void log(const QString &logline);
 
     /**
@@ -111,10 +119,8 @@ signals:
      *
      * @param item Error data
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void debugError(const ErrorItem &item);
-
-    /** @brief bug hunting report */
-    void bughuntingReportLine(QString line);
 
 protected:
 
@@ -122,7 +128,7 @@ protected:
      * @brief Mutex
      *
      */
-    mutable QMutex mutex;
+    mutable std::mutex mutex;
 
     /**
      * @brief List of files to check
@@ -130,31 +136,32 @@ protected:
      */
     QStringList mFiles;
 
-    std::list<ImportProject::FileSettings> mFileSettings;
+    std::list<FileSettings> mFileSettings;
+    std::list<FileSettings>::const_iterator mItNextFileSettings;
 
     /**
      * @brief Max progress
      *
      */
-    quint64 mMaxProgress;
+    quint64 mMaxProgress{};
 
     /**
      * @brief Current progress
      *
      */
-    quint64 mProgress;
+    quint64 mProgress{};
 
     /**
      * @brief Current number of files checked
      *
      */
-    unsigned long mFilesChecked;
+    unsigned long mFilesChecked{};
 
     /**
      * @brief Total number of files
      *
      */
-    unsigned long mTotalFiles;
+    unsigned long mTotalFiles{};
 };
 /// @}
 #endif // THREADRESULT_H

@@ -1,8 +1,8 @@
 # **Cppcheck** 
 
-|GitHub Actions|Linux Build Status|Windows Build Status|OSS-Fuzz|Coverity Scan Build Status|License|
-|:-:|:--:|:--:|:--:|:--:|:-:|
-|[![Github Action Status](https://github.com/danmar/cppcheck/workflows/CI/badge.svg)](https://github.com/danmar/cppcheck/actions?query=workflow%3ACI)|[![Linux Build Status](https://img.shields.io/travis/danmar/cppcheck/main.svg?label=Linux%20build)](https://travis-ci.org/danmar/cppcheck)|[![Windows Build Status](https://img.shields.io/appveyor/ci/danmar/cppcheck/main.svg?label=Windows%20build)](https://ci.appveyor.com/project/danmar/cppcheck/branch/main)|[![OSS-Fuzz](https://oss-fuzz-build-logs.storage.googleapis.com/badges/cppcheck.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:cppcheck)|[![Coverity Scan Build Status](https://img.shields.io/coverity/scan/512.svg)](https://scan.coverity.com/projects/512)|[![License](https://img.shields.io/badge/license-GPL3.0-blue.svg)](https://opensource.org/licenses/GPL-3.0) 
+OSS-Fuzz|Coverity Scan Build Status|License|
+|:--:|:--:|:--:|
+[![OSS-Fuzz](https://oss-fuzz-build-logs.storage.googleapis.com/badges/cppcheck.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:cppcheck)|[![Coverity Scan Build Status](https://img.shields.io/coverity/scan/512.svg)](https://scan.coverity.com/projects/512)|[![License](https://img.shields.io/badge/license-GPL3.0-blue.svg)](https://opensource.org/licenses/GPL-3.0) 
 
 ## About the name
 
@@ -19,7 +19,13 @@ A manual is available [online](https://cppcheck.sourceforge.io/manual.pdf).
 Cppcheck is a hobby project with limited resources. You can help us by donating CPU (1 core or as many as you like). It is simple:
 
  1. Download (and extract) Cppcheck source code.
- 2. Run script: python cppcheck/tools/donate-cpu.py.
+ 2. Run:
+    ```
+    cd cppcheck/
+    virtualenv .env
+    .env/bin/pip install -r tools/donate-cpu-requirements.txt
+    .env/bin/python tools/donate-cpu.py
+    ```
 
 The script will analyse debian source code and upload the results to a cppcheck server. We need these results both to improve Cppcheck and to detect regressions.
 
@@ -27,22 +33,24 @@ You can stop the script whenever you like with Ctrl C.
 
 ## Compiling
 
-Any C++11 compiler should work. For compilers with partial C++11 support it may work. If your compiler has the C++11 features that are available in Visual Studio 2013 / GCC 4.6 then it will work.
+Cppcheck requires a C++ compiler with (partial) C++11 support. Minimum required versions are GCC 5.1 / Clang 3.5 / Visual Studio 2015.
 
-To build the GUI, you need Qt.
+To build the GUI application, you need to use the CMake or qmake (deprecated) build system.
 
 When building the command line tool, [PCRE](http://www.pcre.org/) is optional. It is used if you build with rules.
 
 There are multiple compilation choices:
-* qmake - cross platform build tool
-* cmake - cross platform build tool
-* Windows: Visual Studio (VS 2013 and above)
-* Windows: Qt Creator + mingw
-* gnu make
-* g++ 4.6 (or later)
-* clang++
+* qmake - cross platform build tool (deprecated)
+* CMake - cross platform build tool
+* Windows: Visual Studio
+* Windows: Qt Creator + MinGW
+* GNU make
+* GCC (g++)
+* Clang (clang++)
 
-### cmake
+### CMake
+
+The minimum required version is CMake 3.5.
 
 Example, compiling Cppcheck with cmake:
 
@@ -62,9 +70,34 @@ For rules support (requires pcre) use the flag.
 For release builds it is recommended that you use:
 -DUSE_MATCHCOMPILER=ON
 
+For building the tests use the flag.
+-DBUILD_TESTS=ON
+
 Using cmake you can generate project files for Visual Studio,XCode,etc.
 
+#### Building a specific configuration
+
+For single-configuration generators (like "Unix Makefiles") you can generate and build a specific configuration (e.g. "RelWithDebInfo") using:
+
+```shell
+mkdir build_RelWithDebInfo
+cd build_RelWithDebInfo
+cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
+cmake --build . --config RelWithDebInfo
+```
+
+For multi-configuration generators (like "Visual Studio 17 2022") the same is achieved using:
+
+```shell
+mkdir build
+cd build
+cmake ..
+cmake --build . --config RelWithDebInfo
+```
+
 ### qmake
+
+NOTE: This has been deprecated and will be removed in a future version. Please use CMake instead.
 
 You can use the gui/gui.pro file to build the GUI.
 
@@ -79,6 +112,14 @@ make
 Use the cppcheck.sln file. The file is configured for Visual Studio 2019, but the platform toolset can be changed easily to older or newer versions. The solution contains platform targets for both x86 and x64.
 
 To compile with rules, select "Release-PCRE" or "Debug-PCRE" configuration. pcre.lib (pcre64.lib for x64 builds) and pcre.h are expected to be in /externals then. A current version of PCRE for Visual Studio can be obtained using [vcpkg](https://github.com/microsoft/vcpkg).
+
+### Visual Studio (from command line)
+
+If you do not wish to use the Visual Studio IDE, you can compile cppcheck from the command line the following command.
+
+```shell
+msbuild cppcheck.sln
+```
 
 ### VS Code (on Windows)
 
@@ -196,7 +237,17 @@ g++ -o cppcheck -std=c++11 -lpcre -DHAVE_RULES -Ilib -Iexternals -Iexternals/sim
 ### MinGW
 
 ```shell
-mingw32-make LDFLAGS=-lshlwapi
+mingw32-make
+```
+
+If you encounter the following error with `MATCHCOMPILER=yes` you need to specify your Python interpreter via `PYTHON_INTERPRETER`.
+
+```
+process_begin: CreateProcess(NULL, which python3, ...) failed.
+makefile:24: pipe: No error
+process_begin: CreateProcess(NULL, which python, ...) failed.
+makefile:27: pipe: No error
+makefile:30: *** Did not find a Python interpreter.  Stop.
 ```
 
 ### Other Compiler/IDE
@@ -216,10 +267,14 @@ mv cppcheck cppcheck.exe
 
 ## Packages
 
-You can install Cppcheck with yum/apt/brew/etc.
+Besides building yourself on the platform of your choice there are also several ways to obtain pre-built packages.<br/>
+*Note:* The non-Windows packages are not maintained by the Cppcheck team but by the respective packagers instead.
 
-The official rpms are built with these files:
-https://src.fedoraproject.org/rpms/cppcheck/tree/master
+- (Windows) An official Windows installer is available via the official Cppcheck SourceForge page: https://cppcheck.sourceforge.io/.
+- (Linux/Unix) Many major distros offer Cppcheck packages via their integrated package managers (`yum`, `apt`, `pacman`, etc.). See https://pkgs.org/search/?q=cppcheck for an overview.
+- (Linux/Unix) Unless you are using a "rolling" distro, it is likely that they are not carrying the latest version. There are several external (mainly unsupported) repositories like AUR (ArchLinux), PPA (ubuntu), EPEL (CentOS/Fedora) etc. which provide up-to-date packages. 
+- (Linux/Unix) The Canonical Snapcraft package is unmaintained and contains a very old version. Please refrain from using it! See https://trac.cppcheck.net/ticket/11641 for more details.
+- (MacOS) A package is available via Homebrew (`brew`). See https://formulae.brew.sh/formula/cppcheck#default.
 
 ## Webpage
 

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2019 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,10 +16,23 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <QObject>
 #include "testprojectfile.h"
+
+#include "importproject.h"
+#include "platform.h"
 #include "projectfile.h"
 #include "settings.h"
+#include "suppressions.h"
+
+#include <string>
+
+#include <QDir>
+#include <QFile>
+#include <QIODevice>
+#include <QList>
+#include <QStringList>
+#include <QTemporaryDir>
+#include <QtTest>
 
 // Mock...
 const char Settings::SafeChecks::XmlRootName[] = "safe-checks";
@@ -27,19 +40,23 @@ const char Settings::SafeChecks::XmlClasses[] = "class-public";
 const char Settings::SafeChecks::XmlExternalFunctions[] = "external-functions";
 const char Settings::SafeChecks::XmlInternalFunctions[] = "internal-functions";
 const char Settings::SafeChecks::XmlExternalVariables[] = "external-variables";
-Settings::Settings() : maxCtuDepth(10), maxTemplateRecursion(100) {}
-cppcheck::Platform::Platform() {}
-Library::Library() {}
-ImportProject::ImportProject() {}
+Settings::Settings() : maxCtuDepth(10) {}
+Platform::Platform() = default;
+Library::Library() = default;
+Library::~Library() = default;
+struct Library::LibraryData {};
+bool ImportProject::sourceFileExists(const std::string & /*file*/) {
+    return true;
+}
 
-void TestProjectFile::loadInexisting()
+void TestProjectFile::loadInexisting() const
 {
     const QString filepath(QString(SRCDIR) + "/../data/projectfiles/foo.cppcheck");
     ProjectFile pfile(filepath);
     QCOMPARE(pfile.read(), false);
 }
 
-void TestProjectFile::loadSimple()
+void TestProjectFile::loadSimple() const
 {
     const QString filepath(QString(SRCDIR) + "/../data/projectfiles/simple.cppcheck");
     ProjectFile pfile(filepath);
@@ -62,7 +79,7 @@ void TestProjectFile::loadSimple()
 }
 
 // Test that project file with old 'ignore' element works
-void TestProjectFile::loadSimpleWithIgnore()
+void TestProjectFile::loadSimpleWithIgnore() const
 {
     const QString filepath(QString(SRCDIR) + "/../data/projectfiles/simple_ignore.cppcheck");
     ProjectFile pfile(filepath);
@@ -84,7 +101,7 @@ void TestProjectFile::loadSimpleWithIgnore()
     QCOMPARE(defines[0], QString("FOO"));
 }
 
-void TestProjectFile::loadSimpleNoroot()
+void TestProjectFile::loadSimpleNoroot() const
 {
     const QString filepath(QString(SRCDIR) + "/../data/projectfiles/simple_noroot.cppcheck");
     ProjectFile pfile(filepath);
@@ -106,4 +123,69 @@ void TestProjectFile::loadSimpleNoroot()
     QCOMPARE(defines[0], QString("FOO"));
 }
 
+void TestProjectFile::getAddonFilePath() const
+{
+    QTemporaryDir tempdir;
+    QVERIFY(tempdir.isValid());
+    const QString filepath(tempdir.path() + "/addon.py");
+
+    QFile file(filepath);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.close();
+
+    // Relative path to addon
+    QCOMPARE(ProjectFile::getAddonFilePath(tempdir.path(), "addon"), filepath);
+    QCOMPARE(ProjectFile::getAddonFilePath(tempdir.path(), "not exist"), QString());
+
+    // Absolute path to addon
+    QCOMPARE(ProjectFile::getAddonFilePath("/not/exist", filepath), filepath);
+    QCOMPARE(ProjectFile::getAddonFilePath(tempdir.path(), filepath), filepath);
+}
+
+void TestProjectFile::getInlineSuppressionDefaultValue() const
+{
+    ProjectFile projectFile;
+    projectFile.setFilename("/some/path/123.cppcheck");
+    QCOMPARE(projectFile.getInlineSuppression(), true);
+}
+
+void TestProjectFile::getInlineSuppression() const
+{
+    ProjectFile projectFile;
+    projectFile.setFilename("/some/path/123.cppcheck");
+    projectFile.setInlineSuppression(false);
+    QCOMPARE(projectFile.getInlineSuppression(), false);
+}
+
+void TestProjectFile::getCheckingSuppressionsRelative() const
+{
+    const SuppressionList::Suppression suppression("*", "externals/*");
+    const QList<SuppressionList::Suppression> suppressions{suppression};
+    ProjectFile projectFile;
+    projectFile.setFilename("/some/path/123.cppcheck");
+    projectFile.setSuppressions(suppressions);
+    QCOMPARE(projectFile.getCheckingSuppressions()[0].fileName, "/some/path/externals/*");
+}
+
+void TestProjectFile::getCheckingSuppressionsAbsolute() const
+{
+    const SuppressionList::Suppression suppression("*", "/some/path/1.h");
+    const QList<SuppressionList::Suppression> suppressions{suppression};
+    ProjectFile projectFile;
+    projectFile.setFilename("/other/123.cppcheck");
+    projectFile.setSuppressions(suppressions);
+    QCOMPARE(projectFile.getCheckingSuppressions()[0].fileName, "/some/path/1.h");
+}
+
+void TestProjectFile::getCheckingSuppressionsStar() const
+{
+    const SuppressionList::Suppression suppression("*", "*.cpp");
+    const QList<SuppressionList::Suppression> suppressions{suppression};
+    ProjectFile projectFile;
+    projectFile.setFilename("/some/path/123.cppcheck");
+    projectFile.setSuppressions(suppressions);
+    QCOMPARE(projectFile.getCheckingSuppressions()[0].fileName, "*.cpp");
+}
+
 QTEST_MAIN(TestProjectFile)
+

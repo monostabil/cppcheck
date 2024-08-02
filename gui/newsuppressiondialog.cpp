@@ -1,9 +1,39 @@
+/*
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2024 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "newsuppressiondialog.h"
-#include "ui_newsuppressiondialog.h"
+
 #include "cppcheck.h"
-#include "color.h"
 #include "errorlogger.h"
 #include "suppressions.h"
+
+#include "ui_newsuppressiondialog.h"
+
+#include <cstdint>
+#include <string>
+
+#include <QComboBox>
+#include <QLineEdit>
+#include <QString>
+#include <QStringList>
+
+class QWidget;
+enum class Color : std::uint8_t;
 
 NewSuppressionDialog::NewSuppressionDialog(QWidget *parent) :
     QDialog(parent),
@@ -13,17 +43,15 @@ NewSuppressionDialog::NewSuppressionDialog(QWidget *parent) :
 
     class QErrorLogger : public ErrorLogger {
     public:
-        void reportOut(const std::string & /*outmsg*/, Color) override {}
+        void reportOut(const std::string & /*outmsg*/, Color /*c*/) override {}
         void reportErr(const ErrorMessage &msg) override {
             errorIds << QString::fromStdString(msg.id);
         }
-        void bughuntingReport(const std::string & /*str*/) override {}
         QStringList errorIds;
     };
 
     QErrorLogger errorLogger;
-    CppCheck cppcheck(errorLogger, false, nullptr);
-    cppcheck.getErrorMessages();
+    CppCheck::getErrorMessages(errorLogger);
     errorLogger.errorIds.sort();
 
     mUI->mComboErrorId->addItems(errorLogger.errorIds);
@@ -36,9 +64,9 @@ NewSuppressionDialog::~NewSuppressionDialog()
     delete mUI;
 }
 
-Suppressions::Suppression NewSuppressionDialog::getSuppression() const
+SuppressionList::Suppression NewSuppressionDialog::getSuppression() const
 {
-    Suppressions::Suppression ret;
+    SuppressionList::Suppression ret;
     ret.errorId = mUI->mComboErrorId->currentText().toStdString();
     if (ret.errorId.empty())
         ret.errorId = "*";
@@ -49,7 +77,7 @@ Suppressions::Suppression NewSuppressionDialog::getSuppression() const
     return ret;
 }
 
-void NewSuppressionDialog::setSuppression(const Suppressions::Suppression &suppression)
+void NewSuppressionDialog::setSuppression(const SuppressionList::Suppression &suppression)
 {
     setWindowTitle(tr("Edit suppression"));
     mUI->mComboErrorId->setCurrentText(QString::fromStdString(suppression.errorId));

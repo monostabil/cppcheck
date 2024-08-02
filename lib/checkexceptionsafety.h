@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,20 +23,13 @@
 
 #include "check.h"
 #include "config.h"
-#include "errortypes.h"
-#include "token.h"
 #include "tokenize.h"
 
-#include <list>
 #include <string>
 
 class Settings;
 class ErrorLogger;
-
-// CWE ID used:
-static const struct CWE CWE398(398U);   // Indicator of Poor Code Quality
-static const struct CWE CWE703(703U);   // Improper Check or Handling of Exceptional Conditions
-static const struct CWE CWE480(480U);   // Use of Incorrect Operator
+class Token;
 
 
 /// @addtogroup Checks
@@ -56,15 +49,16 @@ public:
     /** This constructor is used when registering the CheckClass */
     CheckExceptionSafety() : Check(myName()) {}
 
+private:
     /** This constructor is used when running checks. */
     CheckExceptionSafety(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
         : Check(myName(), tokenizer, settings, errorLogger) {}
 
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
-        if (tokenizer->isC())
+    void runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger) override {
+        if (tokenizer.isC())
             return;
 
-        CheckExceptionSafety checkExceptionSafety(tokenizer, settings, errorLogger);
+        CheckExceptionSafety checkExceptionSafety(&tokenizer, &tokenizer.getSettings(), errorLogger);
         checkExceptionSafety.destructors();
         checkExceptionSafety.deallocThrow();
         checkExceptionSafety.checkRethrowCopy();
@@ -95,7 +89,6 @@ public:
     /** @brief %Check for rethrow not from catch scope */
     void rethrowNoCurrentException();
 
-private:
     /** Don't throw exceptions in destructors */
     void destructorsError(const Token * const tok, const std::string &className);
     void deallocThrowError(const Token * const tok, const std::string &varname);
@@ -108,7 +101,7 @@ private:
     void rethrowNoCurrentExceptionError(const Token *tok);
 
     /** Generate all possible errors (for --errorlist) */
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
         CheckExceptionSafety c(nullptr, settings, errorLogger);
         c.destructorsError(nullptr, "Class");
         c.deallocThrowError(nullptr, "p");
@@ -125,7 +118,7 @@ private:
     }
 
     /** wiki formatted description of the class (for --doc) */
-    std::string classInfo() const OVERRIDE {
+    std::string classInfo() const override {
         return "Checking exception safety\n"
                "- Throwing exceptions in destructors\n"
                "- Throwing exception during invalid state\n"

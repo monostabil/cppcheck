@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,22 +18,49 @@
 
 #include "checkthread.h"
 
+#include "analyzerinfo.h"
+#include "common.h"
+#include "cppcheck.h"
+#include "erroritem.h"
+#include "errorlogger.h"
+#include "errortypes.h"
+#include "filesettings.h"
+#include "settings.h"
+#include "standards.h"
+#include "threadresult.h"
+#include "utils.h"
+
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <list>
+#include <set>
+#include <string>
+#include <vector>
+
+#include <QByteArray>
+#include <QChar>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QIODevice>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSettings>
-#include "erroritem.h"
-#include "threadresult.h"
-#include "cppcheck.h"
-#include "common.h"
+#include <QTextStream>
+#include <QVariant>
 
-static bool executeCommand(std::string exe, std::vector<std::string> args, std::string redirect, std::string *output)
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+#include <QCharRef>
+#endif
+
+// NOLINTNEXTLINE(performance-unnecessary-value-param) - used as callback so we need to preserve the signature
+int CheckThread::executeCommand(std::string exe, std::vector<std::string> args, std::string redirect, std::string &output) // cppcheck-suppress passedByValue
 {
-    output->clear();
+    output.clear();
 
     QStringList args2;
-    for (std::string arg: args)
+    for (const std::string &arg: args)
         args2 << QString::fromStdString(arg);
 
     QProcess process;
@@ -43,31 +70,22 @@ static bool executeCommand(std::string exe, std::vector<std::string> args, std::
     if (redirect == "2>&1") {
         QString s1 = process.readAllStandardOutput();
         QString s2 = process.readAllStandardError();
-        *output = (s1 + "\n" + s2).toStdString();
+        output = (s1 + "\n" + s2).toStdString();
     } else
-        *output = process.readAllStandardOutput().toStdString();
+        output = process.readAllStandardOutput().toStdString();
 
-    if (redirect.compare(0,3,"2> ") == 0) {
+    if (startsWith(redirect, "2> ")) {
         std::ofstream fout(redirect.substr(3));
         fout << process.readAllStandardError().toStdString();
     }
-    return process.exitCode() == 0;
+    return process.exitCode();
 }
 
 
 CheckThread::CheckThread(ThreadResult &result) :
-    mState(Ready),
     mResult(result),
-    mCppcheck(result, true, executeCommand),
-    mAnalyseWholeProgram(false)
-{
-    //ctor
-}
-
-CheckThread::~CheckThread()
-{
-    //dtor
-}
+    mCppcheck(result, true, executeCommand)
+{}
 
 void CheckThread::check(const Settings &settings)
 {
@@ -83,6 +101,7 @@ void CheckThread::analyseWholeProgram(const QStringList &files)
     start();
 }
 
+// cppcheck-suppress unusedFunction - TODO: false positive
 void CheckThread::run()
 {
     mState = Running;
@@ -90,13 +109,11 @@ void CheckThread::run()
     if (!mFiles.isEmpty() || mAnalyseWholeProgram) {
         mAnalyseWholeProgram = false;
         qDebug() << "Whole program analysis";
-        const std::string &buildDir = mCppcheck.settings().buildDir;
-        if (!buildDir.empty()) {
-            std::map<std::string,std::size_t> files2;
-            for (const QString& file : mFiles)
-                files2[file.toStdString()] = 0;
-            mCppcheck.analyseWholeProgram(buildDir, files2);
-        }
+        std::list<FileWithDetails> files2;
+        std::transform(mFiles.cbegin(), mFiles.cend(), std::back_inserter(files2), [&](const QString& file) {
+            return FileWithDetails{file.toStdString(), 0};
+        });
+        mCppcheck.analyseWholeProgram(mCppcheck.settings().buildDir, files2, {});
         mFiles.clear();
         emit done();
         return;
@@ -105,7 +122,7 @@ void CheckThread::run()
     QString file = mResult.getNextFile();
     while (!file.isEmpty() && mState == Running) {
         qDebug() << "Checking file" << file;
-        mCppcheck.check(file.toStdString());
+        mCppcheck.check(FileWithDetails(file.toStdString()));
         runAddonsAndTools(nullptr, file);
         emit fileChecked(file);
 
@@ -113,16 +130,17 @@ void CheckThread::run()
             file = mResult.getNextFile();
     }
 
-    ImportProject::FileSettings fileSettings = mResult.getNextFileSettings();
-    while (!fileSettings.filename.empty() && mState == Running) {
-        file = QString::fromStdString(fileSettings.filename);
+    const FileSettings* fileSettings = nullptr;
+    mResult.getNextFileSettings(fileSettings);
+    while (fileSettings && mState == Running) {
+        file = QString::fromStdString(fileSettings->filename());
         qDebug() << "Checking file" << file;
-        mCppcheck.check(fileSettings);
-        runAddonsAndTools(&fileSettings, QString::fromStdString(fileSettings.filename));
+        mCppcheck.check(*fileSettings);
+        runAddonsAndTools(fileSettings, QString::fromStdString(fileSettings->filename()));
         emit fileChecked(file);
 
         if (mState == Running)
-            fileSettings = mResult.getNextFileSettings();
+            mResult.getNextFileSettings(fileSettings);
     }
 
     if (mState == Running)
@@ -133,32 +151,32 @@ void CheckThread::run()
     emit done();
 }
 
-void CheckThread::runAddonsAndTools(const ImportProject::FileSettings *fileSettings, const QString &fileName)
+void CheckThread::runAddonsAndTools(const FileSettings *fileSettings, const QString &fileName)
 {
-    foreach (const QString addon, mAddonsAndTools) {
+    for (const QString& addon : mAddonsAndTools) {
         if (addon == CLANG_ANALYZER || addon == CLANG_TIDY) {
             if (!fileSettings)
                 continue;
 
-            if (!fileSettings->cfg.empty() && fileSettings->cfg.compare(0,5,"Debug") != 0)
+            if (!fileSettings->cfg.empty() && !startsWith(fileSettings->cfg,"Debug"))
                 continue;
 
             QStringList args;
-            for (std::list<std::string>::const_iterator incIt = fileSettings->includePaths.begin(); incIt != fileSettings->includePaths.end(); ++incIt)
+            for (std::list<std::string>::const_iterator incIt = fileSettings->includePaths.cbegin(); incIt != fileSettings->includePaths.cend(); ++incIt)
                 args << ("-I" + QString::fromStdString(*incIt));
-            for (std::list<std::string>::const_iterator i = fileSettings->systemIncludePaths.begin(); i != fileSettings->systemIncludePaths.end(); ++i)
+            for (std::list<std::string>::const_iterator i = fileSettings->systemIncludePaths.cbegin(); i != fileSettings->systemIncludePaths.cend(); ++i)
                 args << "-isystem" << QString::fromStdString(*i);
-            foreach (QString def, QString::fromStdString(fileSettings->defines).split(";")) {
+            for (const QString& def : QString::fromStdString(fileSettings->defines).split(";")) {
                 args << ("-D" + def);
             }
-            foreach (const std::string& U, fileSettings->undefs) {
+            for (const std::string& U : fileSettings->undefs) {
                 args << QString::fromStdString("-U" + U);
             }
 
             const QString clangPath = CheckThread::clangTidyCmd();
             if (!clangPath.isEmpty()) {
                 QDir dir(clangPath + "/../lib/clang");
-                foreach (QString ver, dir.entryList()) {
+                for (const QString& ver : dir.entryList()) {
                     QString includePath = dir.absolutePath() + '/' + ver + "/include";
                     if (ver[0] != '.' && QDir(includePath).exists()) {
                         args << "-isystem" << includePath;
@@ -171,7 +189,7 @@ void CheckThread::runAddonsAndTools(const ImportProject::FileSettings *fileSetti
             // To create compile_commands.json in windows see:
             // https://bitsmaker.gitlab.io/post/clang-tidy-from-vs2015/
 
-            foreach (QString includePath, mClangIncludePaths) {
+            for (QString includePath : mClangIncludePaths) {
                 if (!includePath.isEmpty()) {
                     includePath.replace("\\", "/");
                     args << "-isystem" << includePath.trimmed();
@@ -184,22 +202,10 @@ void CheckThread::runAddonsAndTools(const ImportProject::FileSettings *fileSetti
             if (!fileSettings->standard.empty())
                 args << ("-std=" + QString::fromStdString(fileSettings->standard));
             else {
-                switch (mCppcheck.settings().standards.cpp) {
-                case Standards::CPP03:
-                    args << "-std=c++03";
-                    break;
-                case Standards::CPP11:
-                    args << "-std=c++11";
-                    break;
-                case Standards::CPP14:
-                    args << "-std=c++14";
-                    break;
-                case Standards::CPP17:
-                    args << "-std=c++17";
-                    break;
-                case Standards::CPP20:
-                    args << "-std=c++20";
-                    break;
+                // TODO: pass C or C++ standard based on file type
+                const std::string std = mCppcheck.settings().standards.getCPP();
+                if (!std.empty()) {
+                    args << ("-std=" + QString::fromStdString(std));
                 }
             }
 
@@ -207,7 +213,7 @@ void CheckThread::runAddonsAndTools(const ImportProject::FileSettings *fileSetti
 
             const std::string &buildDir = mCppcheck.settings().buildDir;
             if (!buildDir.empty()) {
-                analyzerInfoFile = QString::fromStdString(AnalyzerInformation::getAnalyzerInfoFile(buildDir, fileSettings->filename, fileSettings->cfg));
+                analyzerInfoFile = QString::fromStdString(AnalyzerInformation::getAnalyzerInfoFile(buildDir, fileSettings->filename(), fileSettings->cfg));
 
                 QStringList args2(args);
                 args2.insert(0,"-E");
@@ -216,7 +222,11 @@ void CheckThread::runAddonsAndTools(const ImportProject::FileSettings *fileSetti
                 process.start(clangCmd(),args2);
                 process.waitForFinished();
                 const QByteArray &ba = process.readAllStandardOutput();
+#if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
+                const quint16 chksum = qChecksum(QByteArrayView(ba));
+#else
                 const quint16 chksum = qChecksum(ba.data(), ba.length());
+#endif
 
                 QFile f1(analyzerInfoFile + '.' + addon + "-E");
                 if (f1.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -260,7 +270,7 @@ void CheckThread::runAddonsAndTools(const ImportProject::FileSettings *fileSetti
             {
                 const QString cmd(clangTidyCmd());
                 QString debug(cmd.contains(" ") ? ('\"' + cmd + '\"') : cmd);
-                foreach (QString arg, args) {
+                for (const QString& arg : args) {
                     if (arg.contains(" "))
                         debug += " \"" + arg + '\"';
                     else
@@ -304,8 +314,8 @@ void CheckThread::parseClangErrors(const QString &tool, const QString &file0, QS
 {
     QList<ErrorItem> errorItems;
     ErrorItem errorItem;
-    QRegExp r1("(.+):([0-9]+):([0-9]+): (note|warning|error|fatal error): (.*)");
-    QRegExp r2("(.*)\\[([a-zA-Z0-9\\-_\\.]+)\\]");
+    static const QRegularExpression r1("^(.+):([0-9]+):([0-9]+): (note|warning|error|fatal error): (.*)$");
+    static const QRegularExpression r2("^(.*)\\[([a-zA-Z0-9\\-_\\.]+)\\]$");
     QTextStream in(&err, QIODevice::ReadOnly);
     while (!in.atEnd()) {
         QString line = in.readLine();
@@ -324,43 +334,45 @@ void CheckThread::parseClangErrors(const QString &tool, const QString &file0, QS
             continue;
         }
 
-        if (!r1.exactMatch(line))
+        const QRegularExpressionMatch r1MatchRes = r1.match(line);
+        if (!r1MatchRes.hasMatch())
             continue;
-        if (r1.cap(4) != "note") {
+        if (r1MatchRes.captured(4) != "note") {
             errorItems.append(errorItem);
             errorItem = ErrorItem();
-            errorItem.file0 = r1.cap(1);
+            errorItem.file0 = r1MatchRes.captured(1);
         }
 
         errorItem.errorPath.append(QErrorPathItem());
-        errorItem.errorPath.last().file = r1.cap(1);
-        errorItem.errorPath.last().line = r1.cap(2).toInt();
-        errorItem.errorPath.last().column = r1.cap(3).toInt();
-        if (r1.cap(4) == "warning")
-            errorItem.severity = Severity::SeverityType::warning;
-        else if (r1.cap(4) == "error" || r1.cap(4) == "fatal error")
-            errorItem.severity = Severity::SeverityType::error;
+        errorItem.errorPath.last().file = r1MatchRes.captured(1);
+        errorItem.errorPath.last().line = r1MatchRes.captured(2).toInt();
+        errorItem.errorPath.last().column = r1MatchRes.captured(3).toInt();
+        if (r1MatchRes.captured(4) == "warning")
+            errorItem.severity = Severity::warning;
+        else if (r1MatchRes.captured(4) == "error" || r1MatchRes.captured(4) == "fatal error")
+            errorItem.severity = Severity::error;
 
         QString message,id;
-        if (r2.exactMatch(r1.cap(5))) {
-            message = r2.cap(1);
-            const QString id1(r2.cap(2));
+        const QRegularExpressionMatch r2MatchRes = r2.match(r1MatchRes.captured(5));
+        if (r2MatchRes.hasMatch()) {
+            message = r2MatchRes.captured(1);
+            const QString id1(r2MatchRes.captured(2));
             if (id1.startsWith("clang"))
                 id = id1;
             else
-                id = tool + '-' + r2.cap(2);
+                id = tool + '-' + r2MatchRes.captured(2);
             if (tool == CLANG_TIDY) {
                 if (id1.startsWith("performance"))
-                    errorItem.severity = Severity::SeverityType::performance;
+                    errorItem.severity = Severity::performance;
                 else if (id1.startsWith("portability"))
-                    errorItem.severity = Severity::SeverityType::portability;
-                else if (id1.startsWith("cert") || (id1.startsWith("misc") && !id1.contains("unused")))
-                    errorItem.severity = Severity::SeverityType::warning;
+                    errorItem.severity = Severity::portability;
+                else if (id1.startsWith("misc") && !id1.contains("unused"))
+                    errorItem.severity = Severity::warning;
                 else
-                    errorItem.severity = Severity::SeverityType::style;
+                    errorItem.severity = Severity::style;
             }
         } else {
-            message = r1.cap(5);
+            message = r1MatchRes.captured(5);
             id = CLANG_ANALYZER;
         }
 
@@ -373,10 +385,10 @@ void CheckThread::parseClangErrors(const QString &tool, const QString &file0, QS
     }
     errorItems.append(errorItem);
 
-    foreach (const ErrorItem &e, errorItems) {
+    for (const ErrorItem &e : errorItems) {
         if (e.errorPath.isEmpty())
             continue;
-        Suppressions::ErrorMessage errorMessage;
+        SuppressionList::ErrorMessage errorMessage;
         errorMessage.setFileName(e.errorPath.back().file.toStdString());
         errorMessage.lineNumber = e.errorPath.back().line;
         errorMessage.errorId = e.errorId.toStdString();
@@ -386,9 +398,9 @@ void CheckThread::parseClangErrors(const QString &tool, const QString &file0, QS
             continue;
 
         std::list<ErrorMessage::FileLocation> callstack;
-        foreach (const QErrorPathItem &path, e.errorPath) {
-            callstack.push_back(ErrorMessage::FileLocation(path.file.toStdString(), path.info.toStdString(), path.line, path.column));
-        }
+        std::transform(e.errorPath.cbegin(), e.errorPath.cend(), std::back_inserter(callstack), [](const QErrorPathItem& path) {
+            return ErrorMessage::FileLocation(path.file.toStdString(), path.info.toStdString(), path.line, path.column);
+        });
         const std::string f0 = file0.toStdString();
         const std::string msg = e.message.toStdString();
         const std::string id = e.errorId.toStdString();
@@ -397,13 +409,11 @@ void CheckThread::parseClangErrors(const QString &tool, const QString &file0, QS
     }
 }
 
-bool CheckThread::isSuppressed(const Suppressions::ErrorMessage &errorMessage) const
+bool CheckThread::isSuppressed(const SuppressionList::ErrorMessage &errorMessage) const
 {
-    foreach (const Suppressions::Suppression &suppression, mSuppressions) {
-        if (suppression.isSuppressed(errorMessage))
-            return true;
-    }
-    return false;
+    return std::any_of(mSuppressions.cbegin(), mSuppressions.cend(), [&](const SuppressionList::Suppression& s) {
+        return s.isSuppressed(errorMessage);
+    });
 }
 
 QString CheckThread::clangCmd()

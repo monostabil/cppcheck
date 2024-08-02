@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,12 +20,23 @@
 #ifndef CHECKTHREAD_H
 #define CHECKTHREAD_H
 
-#include <QThread>
 #include "cppcheck.h"
 #include "suppressions.h"
 
+#include <atomic>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include <QList>
+#include <QObject>
+#include <QString>
+#include <QStringList>
+#include <QThread>
+
 class Settings;
 class ThreadResult;
+struct FileSettings;
 
 /// @addtogroup GUI
 /// @{
@@ -38,7 +49,6 @@ class CheckThread : public QThread {
     Q_OBJECT
 public:
     explicit CheckThread(ThreadResult &result);
-    virtual ~CheckThread();
 
     /**
      * @brief Set settings for cppcheck
@@ -57,15 +67,11 @@ public:
         mAddonsAndTools = addonsAndTools;
     }
 
-    void setDataDir(const QString &dataDir) {
-        mDataDir = dataDir;
-    }
-
     void setClangIncludePaths(const QStringList &s) {
         mClangIncludePaths = s;
     }
 
-    void setSuppressions(const QList<Suppressions::Suppression> &s) {
+    void setSuppressions(const QList<SuppressionList::Suppression> &s) {
         mSuppressions = s;
     }
 
@@ -73,7 +79,7 @@ public:
      * @brief method that is run in a thread
      *
      */
-    void run();
+    void run() override;
 
     void stop();
 
@@ -89,6 +95,8 @@ public:
      */
     static QString clangTidyCmd();
 
+    static int executeCommand(std::string exe, std::vector<std::string> args, std::string redirect, std::string &output);
+
 signals:
 
     /**
@@ -97,6 +105,7 @@ signals:
      */
     void done();
 
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void fileChecked(const QString &file);
 protected:
 
@@ -107,7 +116,7 @@ protected:
      * has been completed. Thread must be stopped cleanly, just terminating thread
      * likely causes unpredictable side-effects.
      */
-    enum State {
+    enum State : std::uint8_t {
         Running, /**< The thread is checking. */
         Stopping, /**< The thread will stop after current work. */
         Stopped, /**< The thread has been stopped. */
@@ -115,9 +124,9 @@ protected:
     };
 
     /**
-     * @brief Thread's current execution state.
+     * @brief Thread's current execution state. Can be changed from outside
      */
-    State mState;
+    std::atomic<State> mState{Ready};
 
     ThreadResult &mResult;
     /**
@@ -126,18 +135,17 @@ protected:
     CppCheck mCppcheck;
 
 private:
-    void runAddonsAndTools(const ImportProject::FileSettings *fileSettings, const QString &fileName);
+    void runAddonsAndTools(const FileSettings *fileSettings, const QString &fileName);
 
     void parseClangErrors(const QString &tool, const QString &file0, QString err);
 
-    bool isSuppressed(const Suppressions::ErrorMessage &errorMessage) const;
+    bool isSuppressed(const SuppressionList::ErrorMessage &errorMessage) const;
 
     QStringList mFiles;
-    bool mAnalyseWholeProgram;
+    bool mAnalyseWholeProgram{};
     QStringList mAddonsAndTools;
-    QString mDataDir;
     QStringList mClangIncludePaths;
-    QList<Suppressions::Suppression> mSuppressions;
+    QList<SuppressionList::Suppression> mSuppressions;
 };
 /// @}
 #endif // CHECKTHREAD_H

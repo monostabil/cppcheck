@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,13 +20,15 @@
 #define STATSDIALOG_H
 
 #include <QDialog>
-#ifdef HAVE_QCHART
-#include <QtCharts>
-#endif
-#include "ui_stats.h"
+#include <QObject>
+#include <QString>
 
 class ProjectFile;
 class CheckStatistics;
+class QWidget;
+namespace Ui {
+    class StatsDialog;
+}
 
 /// @addtogroup GUI
 /// @{
@@ -39,6 +41,7 @@ class StatsDialog : public QDialog {
     Q_OBJECT
 public:
     explicit StatsDialog(QWidget *parent = nullptr);
+    ~StatsDialog() override;
 
     /**
      * @brief Sets the project to extract statistics from
@@ -68,13 +71,9 @@ public:
 private slots:
     void copyToClipboard();
     void pdfExport();
-#ifdef HAVE_QCHART
-    QChartView *createChart(const QString &statsFile, const QString &tool);
-    QLineSeries *numberOfReports(const QString &fileName, const QString &severity) const;
-#endif
 private:
-    Ui::StatsDialog mUI;
-    const CheckStatistics *mStatistics;
+    Ui::StatsDialog *mUI;
+    const CheckStatistics* mStatistics{};
 };
 
 /// @}

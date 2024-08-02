@@ -1,21 +1,27 @@
-// Cppcheck - A tool for static C/C++ code analysis
-// Copyright (C) 2007-2021 Cppcheck team.
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+/*
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2024 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
 
 #include "options.h"
-#include "testsuite.h"
+#include "fixture.h"
+
+#include <functional>
+#include <set>
+#include <string>
 
 
 class TestOptions : public TestFixture {
@@ -25,7 +31,7 @@ public:
 
 
 private:
-    void run() OVERRIDE {
+    void run() override {
         TEST_CASE(which_test);
         TEST_CASE(which_test_method);
         TEST_CASE(no_test_method);
@@ -37,6 +43,8 @@ private:
         TEST_CASE(multiple_testcases);
         TEST_CASE(multiple_testcases_ignore_duplicates);
         TEST_CASE(invalid_switches);
+        TEST_CASE(summary);
+        TEST_CASE(dry_run);
     }
 
 
@@ -114,6 +122,18 @@ private:
         std::set<std::string> expected {"TestClass::TestMethod"};
         ASSERT(expected == args.which_test());
         ASSERT_EQUALS(true, args.quiet());
+    }
+
+    void summary() const {
+        const char* argv[] = {"./test_runner", "TestClass::TestMethod", "-n"};
+        options args(sizeof argv / sizeof argv[0], argv);
+        ASSERT_EQUALS(false, args.summary());
+    }
+
+    void dry_run() const {
+        const char* argv[] = {"./test_runner", "TestClass::TestMethod", "-d"};
+        options args(sizeof argv / sizeof argv[0], argv);
+        ASSERT_EQUALS(true, args.dry_run());
     }
 };
 

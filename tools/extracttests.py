@@ -1,7 +1,7 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Cppcheck - A tool for static C/C++ code analysis
-# Copyright (C) 2007-2019 Cppcheck team.
+# Copyright (C) 2007-2021 Cppcheck team.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -94,8 +94,7 @@ class Extract:
         start_code = None
         disable = False
 
-        fin = open(filename, 'r')
-        for line in fin:
+        for line in open(filename, 'r'):
             # testclass starts
             res = re.match('class (' + name + ')', line)
             if res is not None:
@@ -137,6 +136,10 @@ class Extract:
             if code is not None:
                 res = re.match('\\s+' + string, line)
                 if res is not None:
+                    if line.find('",') > line.find('"'):
+                        code = None
+                        continue
+
                     code = code + res.group(1)
                     if res.group(1).find('"') > 0:
                         code = None
@@ -159,10 +162,8 @@ class Extract:
                         'expected': expected}
                 self.nodes.append(node)
                 code = None
-
-        # close test file
-        fin.close()
-
+            elif re.match('\\s+[TOD_]*ASSERT', line) is not None:
+                code = None
 
 def strtoxml(s):
     """Convert string to xml/html format"""
@@ -355,10 +356,7 @@ if filename is not None:
         if not os.path.exists(codedir):
             os.mkdir(codedir)
 
-        testfile = filename
-        if testfile.find('/'):
-            testfile = testfile[testfile.rfind('/'):]
-        testfile = testfile[:testfile.find('.')]
+        testfile = os.path.splitext(os.path.basename(filename))[0]
 
         for node in e.nodes:
             if onlyTP and node['expected'] == '':

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,20 +18,26 @@
 
 #include "threadhandler.h"
 
-#include <QFileInfo>
-#include <QDebug>
-#include <QSettings>
-#include "common.h"
-#include "settings.h"
 #include "checkthread.h"
+#include "common.h"
 #include "resultsview.h"
+#include "settings.h"
+
+#include <algorithm>
+#include <string>
+#include <unordered_set>
+#include <utility>
+
+#include <QDebug>
+#include <QFile>
+#include <QFileInfo>
+#include <QIODevice>
+#include <QSettings>
+#include <QTextStream>
+#include <QVariant>
 
 ThreadHandler::ThreadHandler(QObject *parent) :
-    QObject(parent),
-    mScanDuration(0),
-    mRunningThreadCount(0),
-    mAnalyseWholeProgram(false)
-
+    QObject(parent)
 {
     setThreadCount(1);
 }
@@ -87,10 +93,7 @@ void ThreadHandler::check(const Settings &settings)
     setThreadCount(settings.jobs);
 
     mRunningThreadCount = mThreads.size();
-
-    if (mResults.getFileCount() < mRunningThreadCount) {
-        mRunningThreadCount = mResults.getFileCount();
-    }
+    mRunningThreadCount = std::min(mResults.getFileCount(), mRunningThreadCount);
 
     QStringList addonsAndTools = mAddonsAndTools;
     for (const std::string& addon: settings.addons) {
@@ -103,7 +106,6 @@ void ThreadHandler::check(const Settings &settings)
         mThreads[i]->setAddonsAndTools(addonsAndTools);
         mThreads[i]->setSuppressions(mSuppressions);
         mThreads[i]->setClangIncludePaths(mClangIncludePaths);
-        mThreads[i]->setDataDir(mDataDir);
         mThreads[i]->check(settings);
     }
 
@@ -112,7 +114,7 @@ void ThreadHandler::check(const Settings &settings)
 
     mAnalyseWholeProgram = true;
 
-    mTime.start();
+    mTimer.start();
 }
 
 bool ThreadHandler::isChecking() const
@@ -144,7 +146,10 @@ void ThreadHandler::setThreadCount(const int count)
 void ThreadHandler::removeThreads()
 {
     for (CheckThread* thread : mThreads) {
-        thread->terminate();
+        if (thread->isRunning()) {
+            thread->terminate();
+            thread->wait();
+        }
         disconnect(thread, &CheckThread::done,
                    this, &ThreadHandler::threadDone);
         disconnect(thread, &CheckThread::fileChecked,
@@ -168,7 +173,7 @@ void ThreadHandler::threadDone()
     if (mRunningThreadCount == 0) {
         emit done();
 
-        mScanDuration = mTime.elapsed();
+        mScanDuration = mTimer.elapsed();
 
         // Set date/time used by the recheck
         if (!mCheckStartTime.isNull()) {
@@ -187,7 +192,7 @@ void ThreadHandler::stop()
     }
 }
 
-void ThreadHandler::initialize(ResultsView *view)
+void ThreadHandler::initialize(const ResultsView *view)
 {
     connect(&mResults, &ThreadResult::progress,
             view, &ResultsView::progress);
@@ -200,9 +205,6 @@ void ThreadHandler::initialize(ResultsView *view)
 
     connect(&mResults, &ThreadResult::debugError,
             this, &ThreadHandler::debugError);
-
-    connect(&mResults, &ThreadResult::bughuntingReportLine,
-            this, &ThreadHandler::bughuntingReportLine);
 }
 
 void ThreadHandler::loadSettings(const QSettings &settings)
@@ -271,12 +273,12 @@ bool ThreadHandler::needsReCheck(const QString &filename, std::set<QString> &mod
         QString line = in.readLine();
         if (line.startsWith("#include \"")) {
             line.remove(0,10);
-            int i = line.indexOf("\"");
+            const int i = line.indexOf("\"");
             if (i > 0) {
                 line.remove(i,line.length());
                 line = QFileInfo(filename).absolutePath() + "/" + line;
                 if (needsReCheck(line, modified, unmodified)) {
-                    modified.insert(line);
+                    modified.insert(std::move(line));
                     return true;
                 }
             }

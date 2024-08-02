@@ -1,34 +1,128 @@
+/*
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2024 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef GUARD_PROGRAMMEMORY_H
 #define GUARD_PROGRAMMEMORY_H
 
+#include "config.h"
 #include "mathlib.h"
-#include "settings.h"
-#include "utils.h"
-#include "valueflow.h" // needed for alias
+#include "vfvalue.h" // needed for alias
+
+#include <cstddef>
 #include <functional>
 #include <map>
+#include <memory>
+#include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
+class Scope;
 class Token;
+class Settings;
 
-struct ProgramMemory {
-    using Map = std::unordered_map<nonneg int, ValueFlow::Value>;
-    Map values;
+// Class used to handle heterogeneous lookup in unordered_map(since we can't use C++20 yet)
+struct ExprIdToken {
+    const Token* tok = nullptr;
+    nonneg int exprid = 0;
 
-    void setValue(nonneg int exprid, const ValueFlow::Value& value);
+    ExprIdToken() = default;
+    // cppcheck-suppress noExplicitConstructor
+    // NOLINTNEXTLINE(google-explicit-constructor)
+    ExprIdToken(const Token* tok);
+    // TODO: Make this constructor only available from ProgramMemory
+    // cppcheck-suppress noExplicitConstructor
+    // NOLINTNEXTLINE(google-explicit-constructor)
+    ExprIdToken(nonneg int exprid) : exprid(exprid) {}
+
+    nonneg int getExpressionId() const;
+
+    bool operator==(const ExprIdToken& rhs) const {
+        return getExpressionId() == rhs.getExpressionId();
+    }
+
+    bool operator<(const ExprIdToken& rhs) const {
+        return getExpressionId() < rhs.getExpressionId();
+    }
+
+    template<class T, class U>
+    friend bool operator!=(const T& lhs, const U& rhs)
+    {
+        return !(lhs == rhs);
+    }
+
+    template<class T, class U>
+    friend bool operator<=(const T& lhs, const U& rhs)
+    {
+        return !(lhs > rhs);
+    }
+
+    template<class T, class U>
+    friend bool operator>(const T& lhs, const U& rhs)
+    {
+        return rhs < lhs;
+    }
+
+    template<class T, class U>
+    friend bool operator>=(const T& lhs, const U& rhs)
+    {
+        return !(lhs < rhs);
+    }
+
+    const Token& operator*() const NOEXCEPT {
+        return *tok;
+    }
+
+    const Token* operator->() const NOEXCEPT {
+        return tok;
+    }
+
+    struct Hash {
+        std::size_t operator()(ExprIdToken etok) const;
+    };
+};
+
+struct CPPCHECKLIB ProgramMemory {
+    using Map = std::unordered_map<ExprIdToken, ValueFlow::Value, ExprIdToken::Hash>;
+
+    ProgramMemory() : mValues(new Map()) {}
+
+    explicit ProgramMemory(Map values) : mValues(new Map(std::move(values))) {}
+
+    void setValue(const Token* expr, const ValueFlow::Value& value);
     const ValueFlow::Value* getValue(nonneg int exprid, bool impossible = false) const;
 
-    bool getIntValue(nonneg int exprid, MathLib::bigint* result) const;
-    void setIntValue(nonneg int exprid, MathLib::bigint value, bool impossible = false);
+    bool getIntValue(nonneg int exprid, MathLib::bigint& result) const;
+    void setIntValue(const Token* expr, MathLib::bigint value, bool impossible = false);
 
-    bool getContainerSizeValue(nonneg int exprid, MathLib::bigint* result) const;
-    bool getContainerEmptyValue(nonneg int exprid, MathLib::bigint* result) const;
-    void setContainerSizeValue(nonneg int exprid, MathLib::bigint value, bool isEqual = true);
+    bool getContainerSizeValue(nonneg int exprid, MathLib::bigint& result) const;
+    bool getContainerEmptyValue(nonneg int exprid, MathLib::bigint& result) const;
+    void setContainerSizeValue(const Token* expr, MathLib::bigint value, bool isEqual = true);
 
-    void setUnknown(nonneg int exprid);
+    void setUnknown(const Token* expr);
 
-    bool getTokValue(nonneg int exprid, const Token** result) const;
+    bool getTokValue(nonneg int exprid, const Token*& result) const;
     bool hasValue(nonneg int exprid);
+
+    const ValueFlow::Value& at(nonneg int exprid) const;
+    ValueFlow::Value& at(nonneg int exprid);
+
+    void erase_if(const std::function<bool(const ExprIdToken&)>& pred);
 
     void swap(ProgramMemory &pm);
 
@@ -36,12 +130,29 @@ struct ProgramMemory {
 
     bool empty() const;
 
-    void replace(const ProgramMemory &pm);
+    void replace(ProgramMemory pm);
 
-    void insert(const ProgramMemory &pm);
+    Map::const_iterator begin() const {
+        return mValues->cbegin();
+    }
+
+    Map::const_iterator end() const {
+        return mValues->cend();
+    }
+
+    friend bool operator==(const ProgramMemory& x, const ProgramMemory& y) {
+        return x.mValues == y.mValues;
+    }
+
+    friend bool operator!=(const ProgramMemory& x, const ProgramMemory& y) {
+        return x.mValues != y.mValues;
+    }
+
+private:
+    void copyOnWrite();
+
+    std::shared_ptr<Map> mValues;
 };
-
-void programMemoryParseCondition(ProgramMemory& pm, const Token* tok, const Token* endTok, const Settings* settings, bool then);
 
 struct ProgramMemoryState {
     ProgramMemory state;
@@ -50,8 +161,7 @@ struct ProgramMemoryState {
 
     explicit ProgramMemoryState(const Settings* s);
 
-    void insert(const ProgramMemory &pm, const Token* origin = nullptr);
-    void replace(const ProgramMemory &pm, const Token* origin = nullptr);
+    void replace(ProgramMemory pm, const Token* origin = nullptr);
 
     void addState(const Token* tok, const ProgramMemory::Map& vars);
 
@@ -62,28 +172,37 @@ struct ProgramMemoryState {
     ProgramMemory get(const Token* tok, const Token* ctx, const ProgramMemory::Map& vars) const;
 };
 
-void execute(const Token* expr, ProgramMemory* const programMemory, MathLib::bigint* result, bool* error);
+std::vector<ValueFlow::Value> execute(const Scope* scope, ProgramMemory& pm, const Settings& settings);
+
+void execute(const Token* expr,
+             ProgramMemory& programMemory,
+             MathLib::bigint* result,
+             bool* error,
+             const Settings& settings);
 
 /**
  * Is condition always false when variable has given value?
  * \param condition   top ast token in condition
- * \param programMemory   program memory
+ * \param pm   program memory
  */
-bool conditionIsFalse(const Token *condition, const ProgramMemory &programMemory);
+bool conditionIsFalse(const Token* condition, ProgramMemory pm, const Settings& settings);
 
 /**
  * Is condition always true when variable has given value?
  * \param condition   top ast token in condition
- * \param programMemory   program memory
+ * \param pm   program memory
  */
-bool conditionIsTrue(const Token *condition, const ProgramMemory &programMemory);
+bool conditionIsTrue(const Token* condition, ProgramMemory pm, const Settings& settings);
 
 /**
  * Get program memory by looking backwards from given token.
  */
-ProgramMemory getProgramMemory(const Token* tok, nonneg int exprid, const ValueFlow::Value& value, const Settings *settings);
+ProgramMemory getProgramMemory(const Token* tok, const Token* expr, const ValueFlow::Value& value, const Settings& settings);
 
-ProgramMemory getProgramMemory(const Token *tok, const ProgramMemory::Map& vars);
+ValueFlow::Value evaluateLibraryFunction(const std::unordered_map<nonneg int, ValueFlow::Value>& args,
+                                         const std::string& returnValue,
+                                         const Settings& settings,
+                                         bool cpp);
 
 #endif
 

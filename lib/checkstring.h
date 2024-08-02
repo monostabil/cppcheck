@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,13 +24,13 @@
 
 #include "check.h"
 #include "config.h"
+#include "tokenize.h"
 
 #include <string>
 
 class ErrorLogger;
 class Settings;
 class Token;
-class Tokenizer;
 
 /// @addtogroup Checks
 /// @{
@@ -43,13 +43,14 @@ public:
     /** @brief This constructor is used when registering the CheckClass */
     CheckString() : Check(myName()) {}
 
+private:
     /** @brief This constructor is used when running checks. */
     CheckString(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
         : Check(myName(), tokenizer, settings, errorLogger) {}
 
     /** @brief Run checks against the normal token list */
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
-        CheckString checkString(tokenizer, settings, errorLogger);
+    void runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger) override {
+        CheckString checkString(&tokenizer, &tokenizer.getSettings(), errorLogger);
 
         // Checks
         checkString.strPlusChar();
@@ -82,7 +83,6 @@ public:
     /** @brief %Check for overlapping source and destination passed to sprintf() */
     void sprintfOverlappingData();
 
-private:
     void stringLiteralWriteError(const Token *tok, const Token *strValue);
     void sprintfOverlappingDataError(const Token *funcTok, const Token *tok, const std::string &varname);
     void strPlusCharError(const Token *tok);
@@ -94,9 +94,8 @@ private:
     void suspiciousStringCompareError_char(const Token* tok, const std::string& var);
     void overlappingStrcmpError(const Token* eq0, const Token *ne0);
 
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
         CheckString c(nullptr, settings, errorLogger);
-
         c.stringLiteralWriteError(nullptr, nullptr);
         c.sprintfOverlappingDataError(nullptr, nullptr, "varname");
         c.strPlusCharError(nullptr);
@@ -114,7 +113,7 @@ private:
         return "String";
     }
 
-    std::string classInfo() const OVERRIDE {
+    std::string classInfo() const override {
         return "Detect misusage of C-style strings:\n"
                "- overlapping buffers passed to sprintf as source and destination\n"
                "- incorrect length arguments for 'substr' and 'strncmp'\n"

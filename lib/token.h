@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,60 +22,74 @@
 //---------------------------------------------------------------------------
 
 #include "config.h"
+#include "errortypes.h"
 #include "mathlib.h"
-#include "valueflow.h"
 #include "templatesimplifier.h"
 #include "utils.h"
+#include "vfvalue.h"
 
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
 #include <cstddef>
 #include <functional>
 #include <list>
 #include <memory>
 #include <ostream>
+#include <set>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-class Enumerator;
+struct Enumerator;
 class Function;
 class Scope;
 class Settings;
 class Type;
 class ValueType;
 class Variable;
-class TokenList;
-
 class ConstTokenRange;
-
-/**
- * @brief This struct stores pointers to the front and back tokens of the list this token is in.
- */
-struct TokensFrontBack {
-    Token *front;
-    Token *back;
-    const TokenList* list;
-};
+class Token;
+struct TokensFrontBack;
 
 struct ScopeInfo2 {
-    ScopeInfo2(const std::string &name_, const Token *bodyEnd_, const std::set<std::string> &usingNamespaces_ = std::set<std::string>()) : name(name_), bodyEnd(bodyEnd_), usingNamespaces(usingNamespaces_) {}
+    ScopeInfo2(std::string name_, const Token *bodyEnd_, std::set<std::string> usingNamespaces_ = std::set<std::string>()) : name(std::move(name_)), bodyEnd(bodyEnd_), usingNamespaces(std::move(usingNamespaces_)) {}
     std::string name;
-    const Token * const bodyEnd;
+    const Token* const bodyEnd{};
     std::set<std::string> usingNamespaces;
 };
 
+enum class TokenDebug : std::uint8_t { None, ValueFlow, ValueType };
+
 struct TokenImpl {
-    nonneg int mVarId;
-    nonneg int mFileIndex;
-    nonneg int mLineNumber;
-    nonneg int mColumn;
-    nonneg int mExprId;
+    nonneg int mVarId{};
+    nonneg int mFileIndex{};
+    nonneg int mLineNumber{};
+    nonneg int mColumn{};
+    nonneg int mExprId{};
+
+    /**
+     * A value from 0-100 that provides a rough idea about where in the token
+     * list this token is located.
+     */
+    nonneg int mProgressValue{};
+
+    /**
+     * Token index. Position in token list
+     */
+    nonneg int mIndex{};
+
+    /** Bitfield bit count. */
+    unsigned char mBits{};
 
     // AST..
-    Token *mAstOperand1;
-    Token *mAstOperand2;
-    Token *mAstParent;
+    Token* mAstOperand1{};
+    Token* mAstOperand2{};
+    Token* mAstParent{};
 
     // symbol database information
-    const Scope *mScope;
+    const Scope* mScope{};
     union {
         const Function *mFunction;
         const Variable *mVariable;
@@ -83,72 +97,51 @@ struct TokenImpl {
         const Enumerator *mEnumerator;
     };
 
-    /**
-     * A value from 0-100 that provides a rough idea about where in the token
-     * list this token is located.
-     */
-    nonneg int mProgressValue;
-
-    /**
-     * Token index. Position in token list
-     */
-    nonneg int mIndex;
-
     // original name like size_t
-    std::string* mOriginalName;
+    std::string* mOriginalName{};
+
+    // If this token came from a macro replacement list, this is the name of that macro
+    std::string mMacroName;
 
     // ValueType
-    ValueType *mValueType;
+    ValueType* mValueType{};
 
     // ValueFlow
-    std::list<ValueFlow::Value>* mValues;
+    std::list<ValueFlow::Value>* mValues{};
     static const std::list<ValueFlow::Value> mEmptyValueList;
 
     // Pointer to a template in the template simplifier
-    std::set<TemplateSimplifier::TokenAndName*>* mTemplateSimplifierPointers;
+    std::set<TemplateSimplifier::TokenAndName*>* mTemplateSimplifierPointers{};
 
     // Pointer to the object representing this token's scope
     std::shared_ptr<ScopeInfo2> mScopeInfo;
 
     // __cppcheck_in_range__
     struct CppcheckAttributes {
-        enum Type {LOW,HIGH} type;
-        MathLib::bigint value;
-        struct CppcheckAttributes *next;
+        enum Type : std::uint8_t { LOW, HIGH } type = LOW;
+        MathLib::bigint value{};
+        CppcheckAttributes* next{};
     };
-    struct CppcheckAttributes *mCppcheckAttributes;
+    CppcheckAttributes* mCppcheckAttributes{};
+
+    // alignas expressions
+    std::unique_ptr<std::vector<std::string>> mAttributeAlignas;
+    void addAttributeAlignas(const std::string& a) {
+        if (!mAttributeAlignas)
+            mAttributeAlignas = std::unique_ptr<std::vector<std::string>>(new std::vector<std::string>());
+        if (std::find(mAttributeAlignas->cbegin(), mAttributeAlignas->cend(), a) == mAttributeAlignas->cend())
+            mAttributeAlignas->push_back(a);
+    }
 
     // For memoization, to speed up parsing of huge arrays #8897
-    enum class Cpp11init {UNKNOWN, CPP11INIT, NOINIT} mCpp11init;
+    enum class Cpp11init : std::uint8_t { UNKNOWN, CPP11INIT, NOINIT } mCpp11init = Cpp11init::UNKNOWN;
 
-    /** Bitfield bit count. */
-    unsigned char mBits;
+    TokenDebug mDebug{};
 
     void setCppcheckAttribute(CppcheckAttributes::Type type, MathLib::bigint value);
-    bool getCppcheckAttribute(CppcheckAttributes::Type type, MathLib::bigint *value) const;
+    bool getCppcheckAttribute(CppcheckAttributes::Type type, MathLib::bigint &value) const;
 
-    TokenImpl()
-        : mVarId(0)
-        , mFileIndex(0)
-        , mLineNumber(0)
-        , mColumn(0)
-        , mExprId(0)
-        , mAstOperand1(nullptr)
-        , mAstOperand2(nullptr)
-        , mAstParent(nullptr)
-        , mScope(nullptr)
-        , mFunction(nullptr) // Initialize whole union
-        , mProgressValue(0)
-        , mIndex(0)
-        , mOriginalName(nullptr)
-        , mValueType(nullptr)
-        , mValues(nullptr)
-        , mTemplateSimplifierPointers(nullptr)
-        , mScopeInfo(nullptr)
-        , mCppcheckAttributes(nullptr)
-        , mCpp11init(Cpp11init::UNKNOWN)
-        , mBits(0)
-    {}
+    TokenImpl() : mFunction(nullptr) {}
 
     ~TokenImpl();
 };
@@ -167,15 +160,16 @@ struct TokenImpl {
  * The Token class also has other functions for management of token list, matching tokens, etc.
  */
 class CPPCHECKLIB Token {
-private:
-    TokensFrontBack* mTokensFrontBack;
+    friend class TestToken;
 
-    // Not implemented..
-    Token(const Token &);
-    Token operator=(const Token &);
+private:
+    TokensFrontBack& mTokensFrontBack;
 
 public:
-    enum Type {
+    Token(const Token &) = delete;
+    Token& operator=(const Token &) = delete;
+
+    enum Type : std::uint8_t {
         eVariable, eType, eFunction, eKeyword, eName, // Names: Variable (varId), Type (typeId, later), Function (FuncId, later), Language keyword, Name (unknown identifier)
         eNumber, eString, eChar, eBoolean, eLiteral, eEnumerator, // Literals: Number, String, Character, Boolean, User defined literal (C++11), Enumerator
         eArithmeticalOp, eComparisonOp, eAssignmentOp, eLogicalOp, eBitOp, eIncDecOp, eExtendedOp, // Operators: Arithmetical, Comparison, Assignment, Logical, Bitwise, ++/--, Extended
@@ -186,7 +180,9 @@ public:
         eNone
     };
 
-    explicit Token(TokensFrontBack *tokensFrontBack = nullptr);
+    explicit Token(TokensFrontBack &tokensFrontBack);
+    // for usage in CheckIO::ArgumentInfo only
+    explicit Token(const Token *tok);
     ~Token();
 
     ConstTokenRange until(const Token * t) const;
@@ -229,25 +225,37 @@ public:
      * For example index 1 would return next token, and 2
      * would return next from that one.
      */
-    const Token *tokAt(int index) const;
-    Token *tokAt(int index) {
-        return const_cast<Token *>(const_cast<const Token *>(this)->tokAt(index));
+    const Token *tokAt(int index) const
+    {
+        return tokAtImpl(this, index);
+    }
+    Token *tokAt(int index)
+    {
+        return tokAtImpl(this, index);
     }
 
     /**
      * @return the link to the token in given index, related to this token.
      * For example index 1 would return the link to next token.
      */
-    const Token *linkAt(int index) const;
-    Token *linkAt(int index) {
-        return const_cast<Token *>(const_cast<const Token *>(this)->linkAt(index));
+    const Token *linkAt(int index) const
+    {
+        return linkAtImpl(this, index);
+    }
+    Token *linkAt(int index)
+    {
+        return linkAtImpl(this, index);
     }
 
     /**
      * @return String of the token in given index, related to this token.
      * If that token does not exist, an empty string is being returned.
      */
-    const std::string &strAt(int index) const;
+    const std::string &strAt(int index) const
+    {
+        const Token *tok = this->tokAt(index);
+        return tok ? tok->mStr : emptyString;
+    }
 
     /**
      * Match given token (or list of tokens) to a pattern list.
@@ -285,18 +293,18 @@ public:
      * - "%char%" Any token enclosed in &apos;-character.
      * - "%comp%" Any token such that isComparisonOp() returns true.
      * - "%cop%" Any token such that isConstOp() returns true.
-     * - "%name%" any token which is a name, variable or type e.g. "hello" or "int"
+     * - "%name%" any token which is a name, variable or type e.g. "hello" or "int". Also matches keywords.
      * - "%num%" Any numeric token, e.g. "23"
      * - "%op%" Any token such that isOp() returns true.
      * - "%or%" A bitwise-or operator '|'
      * - "%oror%" A logical-or operator '||'
-     * - "%type%" Anything that can be a variable type, e.g. "int", but not "delete".
+     * - "%type%" Anything that can be a variable type, e.g. "int". Also matches keywords.
      * - "%str%" Any token starting with &quot;-character (C-string).
      * - "%var%" Match with token with varId > 0
      * - "%varid%" Match with parameter varid
      * - "[abc]" Any of the characters 'a' or 'b' or 'c'
      * - "int|void|char" Any of the strings, int, void or char
-     * - "int|void|char|" Any of the strings, int, void or char or empty string
+     * - "int|void|char|" Any of the strings, int, void or char or no token
      * - "!!else" No tokens or any token that is not "else".
      * - "someRandomText" If token contains "someRandomText".
      *
@@ -346,29 +354,14 @@ public:
      * @param tok token with C-string
      * @param settings Settings
      **/
-    static nonneg int getStrSize(const Token *tok, const Settings *const settings);
-
-    /**
-     * @return char of C-string at index (possible escaped "\\n")
-     *
-     * Should be called for %%str%% tokens only.
-     *
-     * @param tok token with C-string
-     * @param index position of character
-     **/
-    static std::string getCharAt(const Token *tok, MathLib::bigint index);
+    static nonneg int getStrSize(const Token *tok, const Settings & settings);
 
     const ValueType *valueType() const {
         return mImpl->mValueType;
     }
     void setValueType(ValueType *vt);
 
-    const ValueType *argumentType() const {
-        const Token *top = this;
-        while (top && !Token::Match(top->astParent(), ",|("))
-            top = top->astParent();
-        return top ? top->mImpl->mValueType : nullptr;
-    }
+    const ValueType *argumentType() const;
 
     Token::Type tokType() const {
         return mTokType;
@@ -403,6 +396,9 @@ public:
     }
     bool isEnumerator() const {
         return mTokType == eEnumerator;
+    }
+    bool isVariable() const {
+        return mTokType == eVariable;
     }
     bool isOp() const {
         return (isConstOp() ||
@@ -442,10 +438,10 @@ public:
     }
     bool isUnaryPreOp() const;
 
-    unsigned int flags() const {
+    uint64_t flags() const {
         return mFlags;
     }
-    void flags(const unsigned int flags_) {
+    void flags(const uint64_t flags_) {
         mFlags = flags_;
     }
     bool isUnsigned() const {
@@ -460,6 +456,7 @@ public:
     void isSigned(const bool sign) {
         setFlag(fIsSigned, sign);
     }
+    // cppcheck-suppress unusedFunction
     bool isPointerCompare() const {
         return getFlag(fIsPointerCompare);
     }
@@ -479,10 +476,7 @@ public:
         setFlag(fIsStandardType, b);
     }
     bool isExpandedMacro() const {
-        return getFlag(fIsExpandedMacro);
-    }
-    void isExpandedMacro(const bool m) {
-        setFlag(fIsExpandedMacro, m);
+        return !mImpl->mMacroName.empty();
     }
     bool isCast() const {
         return getFlag(fIsCast);
@@ -538,6 +532,12 @@ public:
     void isAttributeNothrow(const bool value) {
         setFlag(fIsAttributeNothrow, value);
     }
+    bool isAttributeExport() const {
+        return getFlag(fIsAttributeExport);
+    }
+    void isAttributeExport(const bool value) {
+        setFlag(fIsAttributeExport, value);
+    }
     bool isAttributePacked() const {
         return getFlag(fIsAttributePacked);
     }
@@ -556,12 +556,22 @@ public:
     void isAttributeMaybeUnused(const bool value) {
         setFlag(fIsAttributeMaybeUnused, value);
     }
+    std::vector<std::string> getAttributeAlignas() const {
+        return mImpl->mAttributeAlignas ? *mImpl->mAttributeAlignas : std::vector<std::string>();
+    }
+    bool hasAttributeAlignas() const {
+        return !!mImpl->mAttributeAlignas;
+    }
+    void addAttributeAlignas(const std::string& a) {
+        mImpl->addAttributeAlignas(a);
+    }
     void setCppcheckAttribute(TokenImpl::CppcheckAttributes::Type type, MathLib::bigint value) {
         mImpl->setCppcheckAttribute(type, value);
     }
-    bool getCppcheckAttribute(TokenImpl::CppcheckAttributes::Type type, MathLib::bigint *value) const {
+    bool getCppcheckAttribute(TokenImpl::CppcheckAttributes::Type type, MathLib::bigint &value) const {
         return mImpl->getCppcheckAttribute(type, value);
     }
+    // cppcheck-suppress unusedFunction
     bool hasCppcheckAttributes() const {
         return nullptr != mImpl->mCppcheckAttributes;
     }
@@ -597,6 +607,20 @@ public:
     }
     void isIncompleteVar(bool b) {
         setFlag(fIncompleteVar, b);
+    }
+
+    bool isSimplifiedTypedef() const {
+        return getFlag(fIsSimplifiedTypedef);
+    }
+    void isSimplifiedTypedef(bool b) {
+        setFlag(fIsSimplifiedTypedef, b);
+    }
+
+    bool isIncompleteConstant() const {
+        return getFlag(fIsIncompleteConstant);
+    }
+    void isIncompleteConstant(bool b) {
+        setFlag(fIsIncompleteConstant, b);
     }
 
     bool isConstexpr() const {
@@ -641,6 +665,27 @@ public:
         setFlag(fIsInline, b);
     }
 
+    bool isAtomic() const {
+        return getFlag(fIsAtomic);
+    }
+    void isAtomic(bool b) {
+        setFlag(fIsAtomic, b);
+    }
+
+    bool isRestrict() const {
+        return getFlag(fIsRestrict);
+    }
+    void isRestrict(bool b) {
+        setFlag(fIsRestrict, b);
+    }
+
+    bool isRemovedVoidParameter() const {
+        return getFlag(fIsRemovedVoidParameter);
+    }
+    void setRemovedVoidParameter(bool b) {
+        setFlag(fIsRemovedVoidParameter, b);
+    }
+
     bool isTemplate() const {
         return getFlag(fIsTemplate);
     }
@@ -648,13 +693,38 @@ public:
         setFlag(fIsTemplate, b);
     }
 
+    bool isSimplifiedScope() const {
+        return getFlag(fIsSimplifedScope);
+    }
+    void isSimplifiedScope(bool b) {
+        setFlag(fIsSimplifedScope, b);
+    }
+
+    bool isFinalType() const {
+        return getFlag(fIsFinalType);
+    }
+    void isFinalType(bool b) {
+        setFlag(fIsFinalType, b);
+    }
+
+    bool isInitComma() const {
+        return getFlag(fIsInitComma);
+    }
+    void isInitComma(bool b) {
+        setFlag(fIsInitComma, b);
+    }
+
+    // cppcheck-suppress unusedFunction
     bool isBitfield() const {
         return mImpl->mBits > 0;
     }
     unsigned char bits() const {
         return mImpl->mBits;
     }
-    std::set<TemplateSimplifier::TokenAndName*>* templateSimplifierPointers() const {
+    const std::set<TemplateSimplifier::TokenAndName*>* templateSimplifierPointers() const {
+        return mImpl->mTemplateSimplifierPointers;
+    }
+    std::set<TemplateSimplifier::TokenAndName*>* templateSimplifierPointers() {
         return mImpl->mTemplateSimplifierPointers;
     }
     void templateSimplifierPointer(TemplateSimplifier::TokenAndName* tokenAndName) {
@@ -682,14 +752,14 @@ public:
     }
 
     bool isCChar() const {
-        return (((mTokType == eString) && isPrefixStringCharLiteral(mStr, '"', "")) ||
-                ((mTokType ==  eChar) && isPrefixStringCharLiteral(mStr, '\'', "") && mStr.length() == 3));
+        return (((mTokType == eString) && isPrefixStringCharLiteral(mStr, '"', emptyString)) ||
+                ((mTokType == eChar) && isPrefixStringCharLiteral(mStr, '\'', emptyString) && (replaceEscapeSequences(getCharLiteral(mStr)).size() == 1)));
     }
 
     bool isCMultiChar() const {
-        return (((mTokType ==  eChar) && isPrefixStringCharLiteral(mStr, '\'', "")) &&
-                (mStr.length() > 3));
+        return (mTokType == eChar) && isPrefixStringCharLiteral(mStr, '\'', emptyString) && (replaceEscapeSequences(getCharLiteral(mStr)).size() > 1);
     }
+
     /**
      * @brief Is current token a template argument?
      *
@@ -714,6 +784,13 @@ public:
         setFlag(fIsTemplateArg, value);
     }
 
+    std::string getMacroName() const {
+        return mImpl->mMacroName;
+    }
+    void setMacroName(std::string name) {
+        mImpl->mMacroName = std::move(name);
+    }
+
     template<size_t count>
     static const Token *findsimplematch(const Token * const startTok, const char (&pattern)[count]) {
         return findsimplematch(startTok, pattern, count-1);
@@ -733,22 +810,39 @@ public:
     static Token *findsimplematch(Token * const startTok, const char (&pattern)[count]) {
         return findsimplematch(startTok, pattern, count-1);
     }
-    static Token *findsimplematch(Token * const startTok, const char pattern[], size_t pattern_len) {
-        return const_cast<Token *>(findsimplematch(const_cast<const Token *>(startTok), pattern, pattern_len));
-    }
+    static Token *findsimplematch(Token * const startTok, const char pattern[], size_t pattern_len);
     template<size_t count>
     static Token *findsimplematch(Token * const startTok, const char (&pattern)[count], const Token * const end) {
         return findsimplematch(startTok, pattern, count-1, end);
     }
-    static Token *findsimplematch(Token * const startTok, const char pattern[], size_t pattern_len, const Token * const end) {
-        return const_cast<Token *>(findsimplematch(const_cast<const Token *>(startTok), pattern, pattern_len, end));
+    static Token *findsimplematch(Token * const startTok, const char pattern[], size_t pattern_len, const Token * const end);
+
+    static Token *findmatch(Token * const startTok, const char pattern[], const nonneg int varId = 0);
+    static Token *findmatch(Token * const startTok, const char pattern[], const Token * const end, const nonneg int varId = 0);
+
+private:
+    template<class T, REQUIRES("T must be a Token class", std::is_convertible<T*, const Token*> )>
+    static T *tokAtImpl(T *tok, int index)
+    {
+        while (index > 0 && tok) {
+            tok = tok->next();
+            --index;
+        }
+        while (index < 0 && tok) {
+            tok = tok->previous();
+            ++index;
+        }
+        return tok;
     }
 
-    static Token *findmatch(Token * const startTok, const char pattern[], const nonneg int varId = 0) {
-        return const_cast<Token *>(findmatch(const_cast<const Token *>(startTok), pattern, varId));
-    }
-    static Token *findmatch(Token * const startTok, const char pattern[], const Token * const end, const nonneg int varId = 0) {
-        return const_cast<Token *>(findmatch(const_cast<const Token *>(startTok), pattern, end, varId));
+    template<class T, REQUIRES("T must be a Token class", std::is_convertible<T*, const Token*> )>
+    static T *linkAtImpl(T *thisTok, int index)
+    {
+        T *tok = thisTok->tokAt(index);
+        if (!tok) {
+            throw InternalError(thisTok, "Internal error. Token::linkAt called with index outside the tokens range.");
+        }
+        return tok->link();
     }
 
     /**
@@ -767,6 +861,7 @@ public:
      */
     static int multiCompare(const Token *tok, const char *haystack, nonneg int varid);
 
+public:
     nonneg int fileIndex() const {
         return mImpl->mFileIndex;
     }
@@ -788,10 +883,13 @@ public:
         mImpl->mColumn = c;
     }
 
-    Token *next() const {
+    Token* next() {
         return mNext;
     }
 
+    const Token* next() const {
+        return mNext;
+    }
 
     /**
      * Delete tokens between begin and end. E.g. if begin = 1
@@ -810,12 +908,20 @@ public:
      * @param prepend Insert the new token before this token when it's not
      * the first one on the tokens list.
      */
-    void insertToken(const std::string &tokenStr, const std::string &originalNameStr=emptyString, bool prepend=false);
+    Token* insertToken(const std::string& tokenStr, const std::string& originalNameStr = emptyString, const std::string& macroNameStr = emptyString, bool prepend = false);
 
-    Token *previous() const {
+    Token* insertTokenBefore(const std::string& tokenStr, const std::string& originalNameStr = emptyString, const std::string& macroNameStr = emptyString)
+    {
+        return insertToken(tokenStr, originalNameStr, macroNameStr, true);
+    }
+
+    Token* previous() {
         return mPrevious;
     }
 
+    const Token* previous() const {
+        return mPrevious;
+    }
 
     nonneg int varId() const {
         return mImpl->mVarId;
@@ -839,6 +945,17 @@ public:
         mImpl->mExprId = id;
     }
 
+    void setUniqueExprId()
+    {
+        assert(mImpl->mExprId > 0);
+        mImpl->mExprId |= 1 << efIsUnique;
+    }
+
+    bool isUniqueExprId() const
+    {
+        return (mImpl->mExprId & (1 << efIsUnique)) != 0;
+    }
+
     /**
      * For debugging purposes, prints token and all tokens
      * followed by it.
@@ -858,7 +975,7 @@ public:
     void printOut(const char *title, const std::vector<std::string> &fileNames) const;
 
     /**
-     * print out tokens
+     * print out tokens - used for debugging
      */
     void printLines(int lines=5) const;
 
@@ -889,6 +1006,7 @@ public:
             options.files = true;
             return options;
         }
+        // cppcheck-suppress unusedFunction
         static stringifyOptions forDebugVarId() {
             stringifyOptions options = forDebug();
             options.varid = true;
@@ -965,7 +1083,11 @@ public:
      *
      * @return The token where this token links to.
      */
-    Token *link() const {
+    const Token* link() const {
+        return mLink;
+    }
+
+    Token* link() {
         return mLink;
     }
 
@@ -1031,7 +1153,11 @@ public:
 
     static const ::Type* typeOf(const Token* tok, const Token** typeTok = nullptr);
 
-    static std::pair<const Token*, const Token*> typeDecl(const Token * tok);
+    /**
+     * @return the declaration associated with this token.
+     * @param pointedToType return the pointed-to type?
+     */
+    static std::pair<const Token*, const Token*> typeDecl(const Token* tok, bool pointedToType = false);
 
     static std::string typeStr(const Token* tok);
 
@@ -1089,21 +1215,22 @@ public:
      * lists. Requires that Tokenizer::createLinks2() has been called before.
      * Returns 0, if there is no next argument.
      */
-    Token* nextArgument() const;
+    const Token* nextArgument() const;
+    Token *nextArgument();
 
     /**
      * @return the first token of the next argument. Does only work on argument
      * lists. Should be used only before Tokenizer::createLinks2() was called.
      * Returns 0, if there is no next argument.
      */
-    Token* nextArgumentBeforeCreateLinks2() const;
+    const Token* nextArgumentBeforeCreateLinks2() const;
 
     /**
      * @return the first token of the next template argument. Does only work on template argument
      * lists. Requires that Tokenizer::createLinks2() has been called before.
      * Returns 0, if there is no next argument.
      */
-    Token* nextTemplateArgument() const;
+    const Token* nextTemplateArgument() const;
 
     /**
      * Returns the closing bracket of opening '<'. Should only be used if link()
@@ -1148,32 +1275,29 @@ public:
         return mImpl->mValues->front().intvalue;
     }
 
-    bool isImpossibleIntValue(const MathLib::bigint val) const;
-
     const ValueFlow::Value* getValue(const MathLib::bigint val) const;
 
     const ValueFlow::Value* getMaxValue(bool condition, MathLib::bigint path = 0) const;
+    const ValueFlow::Value* getMinValue(bool condition, MathLib::bigint path = 0) const;
 
     const ValueFlow::Value* getMovedValue() const;
 
-    const ValueFlow::Value * getValueLE(const MathLib::bigint val, const Settings *settings) const;
-    const ValueFlow::Value * getValueGE(const MathLib::bigint val, const Settings *settings) const;
+    const ValueFlow::Value * getValueLE(const MathLib::bigint val, const Settings &settings) const;
+    const ValueFlow::Value * getValueGE(const MathLib::bigint val, const Settings &settings) const;
 
-    const ValueFlow::Value * getInvalidValue(const Token *ftok, nonneg int argnr, const Settings *settings) const;
+    const ValueFlow::Value * getInvalidValue(const Token *ftok, nonneg int argnr, const Settings &settings) const;
 
     const ValueFlow::Value* getContainerSizeValue(const MathLib::bigint val) const;
 
     const Token *getValueTokenMaxStrLength() const;
-    const Token *getValueTokenMinStrSize(const Settings *settings) const;
-
-    const Token *getValueTokenDeadPointer() const;
+    const Token *getValueTokenMinStrSize(const Settings &settings, MathLib::bigint* path = nullptr) const;
 
     /** Add token value. Return true if value is added. */
     bool addValue(const ValueFlow::Value &value);
 
     void removeValues(std::function<bool(const ValueFlow::Value &)> pred) {
         if (mImpl->mValues)
-            mImpl->mValues->remove_if(pred);
+            mImpl->mValues->remove_if(std::move(pred));
     }
 
     nonneg int index() const {
@@ -1210,52 +1334,66 @@ private:
 
     std::string mStr;
 
-    Token *mNext;
-    Token *mPrevious;
-    Token *mLink;
+    Token* mNext{};
+    Token* mPrevious{};
+    Token* mLink{};
 
     enum : uint64_t {
-        fIsUnsigned             = (1 << 0),
-        fIsSigned               = (1 << 1),
-        fIsPointerCompare       = (1 << 2),
-        fIsLong                 = (1 << 3),
-        fIsStandardType         = (1 << 4),
-        fIsExpandedMacro        = (1 << 5),
-        fIsCast                 = (1 << 6),
-        fIsAttributeConstructor = (1 << 7),  // __attribute__((constructor)) __attribute__((constructor(priority)))
-        fIsAttributeDestructor  = (1 << 8),  // __attribute__((destructor))  __attribute__((destructor(priority)))
-        fIsAttributeUnused      = (1 << 9),  // __attribute__((unused))
-        fIsAttributePure        = (1 << 10), // __attribute__((pure))
-        fIsAttributeConst       = (1 << 11), // __attribute__((const))
-        fIsAttributeNoreturn    = (1 << 12), // __attribute__((noreturn)), __declspec(noreturn)
-        fIsAttributeNothrow     = (1 << 13), // __attribute__((nothrow)), __declspec(nothrow)
-        fIsAttributeUsed        = (1 << 14), // __attribute__((used))
-        fIsAttributePacked      = (1 << 15), // __attribute__((packed))
-        fIsAttributeMaybeUnused = (1 << 16), // [[maybe_unsed]]
-        fIsControlFlowKeyword   = (1 << 17), // if/switch/while/...
-        fIsOperatorKeyword      = (1 << 18), // operator=, etc
-        fIsComplex              = (1 << 19), // complex/_Complex type
-        fIsEnumType             = (1 << 20), // enumeration type
-        fIsName                 = (1 << 21),
-        fIsLiteral              = (1 << 22),
-        fIsTemplateArg          = (1 << 23),
-        fIsAttributeNodiscard   = (1 << 24), // __attribute__ ((warn_unused_result)), [[nodiscard]]
-        fAtAddress              = (1 << 25), // @ 0x4000
-        fIncompleteVar          = (1 << 26),
-        fConstexpr              = (1 << 27),
-        fExternC                = (1 << 28),
-        fIsSplitVarDeclComma    = (1 << 29), // set to true when variable declarations are split up ('int a,b;' => 'int a; int b;')
-        fIsSplitVarDeclEq       = (1 << 30), // set to true when variable declaration with initialization is split up ('int a=5;' => 'int a; a=5;')
-        fIsImplicitInt          = (1U << 31),   // Is "int" token implicitly added?
-        fIsInline               = (1ULL << 32), // Is this a inline type
-        fIsTemplate             = (1ULL << 33)
+        fIsUnsigned             = (1ULL << 0),
+        fIsSigned               = (1ULL << 1),
+        fIsPointerCompare       = (1ULL << 2),
+        fIsLong                 = (1ULL << 3),
+        fIsStandardType         = (1ULL << 4),
+        //fIsExpandedMacro        = (1ULL << 5),
+        fIsCast                 = (1ULL << 6),
+        fIsAttributeConstructor = (1ULL << 7),  // __attribute__((constructor)) __attribute__((constructor(priority)))
+        fIsAttributeDestructor  = (1ULL << 8),  // __attribute__((destructor))  __attribute__((destructor(priority)))
+        fIsAttributeUnused      = (1ULL << 9),  // __attribute__((unused))
+        fIsAttributePure        = (1ULL << 10), // __attribute__((pure))
+        fIsAttributeConst       = (1ULL << 11), // __attribute__((const))
+        fIsAttributeNoreturn    = (1ULL << 12), // __attribute__((noreturn)), __declspec(noreturn)
+        fIsAttributeNothrow     = (1ULL << 13), // __attribute__((nothrow)), __declspec(nothrow)
+        fIsAttributeUsed        = (1ULL << 14), // __attribute__((used))
+        fIsAttributePacked      = (1ULL << 15), // __attribute__((packed))
+        fIsAttributeExport      = (1ULL << 16), // __attribute__((__visibility__("default"))), __declspec(dllexport)
+        fIsAttributeMaybeUnused = (1ULL << 17), // [[maybe_unused]]
+        fIsAttributeNodiscard   = (1ULL << 18), // __attribute__ ((warn_unused_result)), [[nodiscard]]
+        fIsControlFlowKeyword   = (1ULL << 19), // if/switch/while/...
+        fIsOperatorKeyword      = (1ULL << 20), // operator=, etc
+        fIsComplex              = (1ULL << 21), // complex/_Complex type
+        fIsEnumType             = (1ULL << 22), // enumeration type
+        fIsName                 = (1ULL << 23),
+        fIsLiteral              = (1ULL << 24),
+        fIsTemplateArg          = (1ULL << 25),
+        fAtAddress              = (1ULL << 26), // @ 0x4000
+        fIncompleteVar          = (1ULL << 27),
+        fConstexpr              = (1ULL << 28),
+        fExternC                = (1ULL << 29),
+        fIsSplitVarDeclComma    = (1ULL << 30), // set to true when variable declarations are split up ('int a,b;' => 'int a; int b;')
+        fIsSplitVarDeclEq       = (1ULL << 31), // set to true when variable declaration with initialization is split up ('int a=5;' => 'int a; a=5;')
+        fIsImplicitInt          = (1ULL << 32), // Is "int" token implicitly added?
+        fIsInline               = (1ULL << 33), // Is this a inline type
+        fIsTemplate             = (1ULL << 34),
+        fIsSimplifedScope       = (1ULL << 35), // scope added when simplifying e.g. if (int i = ...; ...)
+        fIsRemovedVoidParameter = (1ULL << 36), // A void function parameter has been removed
+        fIsIncompleteConstant   = (1ULL << 37),
+        fIsRestrict             = (1ULL << 38), // Is this a restrict pointer type
+        fIsAtomic               = (1ULL << 39), // Is this a _Atomic declaration
+        fIsSimplifiedTypedef    = (1ULL << 40),
+        fIsFinalType            = (1ULL << 41), // Is this a type with final specifier
+        fIsInitComma            = (1ULL << 42), // Is this comma located inside some {..}. i.e: {1,2,3,4}
     };
 
-    Token::Type mTokType;
+    enum : std::uint8_t  {
+        efMaxSize = sizeof(nonneg int) * 8,
+        efIsUnique = efMaxSize - 2,
+    };
 
-    uint64_t mFlags;
+    Token::Type mTokType = eNone;
 
-    TokenImpl *mImpl;
+    uint64_t mFlags{};
+
+    TokenImpl* mImpl{};
 
     /**
      * Get specified flag state.
@@ -1281,9 +1419,6 @@ private:
 
     /** Update internal property cache about isStandardType() */
     void update_property_isStandardType();
-
-    /** Update internal property cache about string and char literals */
-    void update_property_char_string_literal();
 
     /** Internal helper function to avoid excessive string allocations */
     void astStringVerboseRecursive(std::string& ret, const nonneg int indent1 = 0, const nonneg int indent2 = 0) const;
@@ -1316,7 +1451,7 @@ public:
             return nullptr;
         if (this == astParent()->astOperand1())
             return astParent()->astOperand2();
-        else if (this == astParent()->astOperand2())
+        if (this == astParent()->astOperand2())
             return astParent()->astOperand1();
         return nullptr;
 
@@ -1326,7 +1461,7 @@ public:
             return nullptr;
         if (this == astParent()->astOperand1())
             return astParent()->astOperand2();
-        else if (this == astParent()->astOperand2())
+        if (this == astParent()->astOperand2())
             return astParent()->astOperand1();
         return nullptr;
 
@@ -1355,10 +1490,6 @@ public:
      * @return returns true if current token is a calculation
      */
     bool isCalculation() const;
-
-    void clearAst() {
-        mImpl->mAstOperand1 = mImpl->mAstOperand2 = mImpl->mAstParent = nullptr;
-    }
 
     void clearValueFlow() {
         delete mImpl->mValues;
@@ -1393,10 +1524,20 @@ public:
     TokenImpl::Cpp11init isCpp11init() const {
         return mImpl->mCpp11init;
     }
+
+    TokenDebug getTokenDebug() const {
+        return mImpl->mDebug;
+    }
+    void setTokenDebug(TokenDebug td) {
+        mImpl->mDebug = td;
+    }
+
+    bool isCpp() const;
+
+    bool isC() const;
 };
 
 Token* findTypeEnd(Token* tok);
-const Token* findTypeEnd(const Token* tok);
 Token* findLambdaEndScope(Token* tok);
 const Token* findLambdaEndScope(const Token* tok);
 

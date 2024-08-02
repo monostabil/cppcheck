@@ -1,16 +1,37 @@
+/*
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2023 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef GUARD_PATHANALYSIS_H
 #define GUARD_PATHANALYSIS_H
 
 #include "errortypes.h"
 
+#include <cstdint>
 #include <functional>
+#include <list>
+#include <utility>
 
 class Library;
 class Scope;
 class Token;
 
 struct PathAnalysis {
-    enum class Progress {
+    enum class Progress : std::uint8_t {
         Continue,
         Break
     };
@@ -28,7 +49,7 @@ struct PathAnalysis {
 
     void forward(const std::function<Progress(const Info&)>& f) const;
 
-    Info forwardFind(std::function<bool(const Info&)> pred) {
+    Info forwardFind(std::function<bool(const Info&)> pred) const {
         Info result{};
         forward([&](const Info& info) {
             if (pred(info)) {
@@ -41,7 +62,7 @@ struct PathAnalysis {
     }
 private:
 
-    Progress forwardRecursive(const Token* tok, Info info, const std::function<PathAnalysis::Progress(const Info&)>& f) const;
+    static Progress forwardRecursive(const Token* tok, Info info, const std::function<PathAnalysis::Progress(const Info&)>& f);
     Progress forwardRange(const Token* startToken, const Token* endToken, Info info, const std::function<Progress(const Info&)>& f) const;
 
     static const Scope* findOuterScope(const Scope * scope);

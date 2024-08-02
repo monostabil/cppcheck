@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,17 +22,18 @@
 
 #include "check64bit.h"
 
+#include "errortypes.h"
 #include "settings.h"
 #include "symboldatabase.h"
 #include "token.h"
 #include "tokenize.h"
 
+#include <vector>
 
 //---------------------------------------------------------------------------
 
 // CWE ids used
-static const struct CWE CWE398(398U);   // Indicator of Poor Code Quality
-static const struct CWE CWE758(758U);   // Reliance on Undefined, Unspecified, or Implementation-Defined Behavior
+static const CWE CWE758(758U);   // Reliance on Undefined, Unspecified, or Implementation-Defined Behavior
 
 // Register this check class (by creating a static instance of it)
 namespace {
@@ -43,6 +44,8 @@ void Check64BitPortability::pointerassignment()
 {
     if (!mSettings->severity.isEnabled(Severity::portability))
         return;
+
+    logChecker("Check64BitPortability::pointerassignment"); // portability
 
     const SymbolDatabase *symbolDatabase = mTokenizer->getSymbolDatabase();
 

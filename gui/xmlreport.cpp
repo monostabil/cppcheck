@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,12 +18,19 @@
 
 #include "xmlreport.h"
 
-#include <QFile>
-#include <QXmlStreamReader>
 #include "report.h"
 
-static const char ResultElementName[] = "results";
-static const char VersionAttribute[] = "version";
+#include <QFile>
+#include <QIODevice>
+#include <QXmlStreamAttributes>
+#include <QXmlStreamReader>
+
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+#include <QStringRef>
+#endif
+
+static constexpr char ResultElementName[] = "results";
+static constexpr char VersionAttribute[] = "version";
 
 XmlReport::XmlReport(const QString &filename) :
     Report(filename)
@@ -55,7 +62,7 @@ int XmlReport::determineVersion(const QString &filename)
 {
     QFile file;
     file.setFileName(filename);
-    bool succeed = file.open(QIODevice::ReadOnly | QIODevice::Text);
+    const bool succeed = file.open(QIODevice::ReadOnly | QIODevice::Text);
     if (!succeed)
         return 0;
 
@@ -63,13 +70,13 @@ int XmlReport::determineVersion(const QString &filename)
     while (!reader.atEnd()) {
         switch (reader.readNext()) {
         case QXmlStreamReader::StartElement:
-            if (reader.name() == ResultElementName) {
+            if (reader.name() == QString(ResultElementName)) {
                 QXmlStreamAttributes attribs = reader.attributes();
                 if (attribs.hasAttribute(QString(VersionAttribute))) {
-                    int ver = attribs.value(QString(), VersionAttribute).toString().toInt();
+                    const int ver = attribs.value(QString(), VersionAttribute).toString().toInt();
                     return ver;
-                } else
-                    return 1;
+                }
+                return 1;
             }
             break;
 

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,18 +18,16 @@
 
 #include "applicationlist.h"
 
+#include "application.h"
+#include "common.h"
+
 #include <QFileInfo>
 #include <QSettings>
 #include <QStringList>
-
-#include "common.h"
-#include "application.h"
-
-#include <cstdlib>
+#include <QVariant>
 
 ApplicationList::ApplicationList(QObject *parent) :
-    QObject(parent),
-    mDefaultApplicationIndex(-1)
+    QObject(parent)
 {
     //ctor
 }
@@ -187,7 +185,7 @@ void ApplicationList::clear()
 
 bool ApplicationList::checkAndAddApplication(const QString& appPath, const QString& name, const QString& parameters)
 {
-    if (QFileInfo(appPath).exists() && QFileInfo(appPath).isExecutable()) {
+    if (QFileInfo::exists(appPath) && QFileInfo(appPath).isExecutable()) {
         Application app;
         app.setName(name);
         app.setPath("\"" + appPath + "\"");
@@ -198,6 +196,7 @@ bool ApplicationList::checkAndAddApplication(const QString& appPath, const QStri
     return false;
 }
 
+#ifdef _WIN32
 bool ApplicationList::findDefaultWindowsEditor()
 {
     bool foundOne = false;
@@ -264,3 +263,4 @@ bool ApplicationList::findDefaultWindowsEditor()
 
     return foundOne;
 }
+#endif

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,47 +22,61 @@
 
 #include "errorlogger.h"
 #include "settings.h"
+#include "token.h"
 #include "tokenize.h"
+#include "vfvalue.h"
 
+#include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <stdexcept>
+#include <utility>
 
 //---------------------------------------------------------------------------
 
 Check::Check(const std::string &aname)
-    : mTokenizer(nullptr), mSettings(nullptr), mErrorLogger(nullptr), mName(aname)
+    : mName(aname)
 {
-    for (std::list<Check*>::iterator i = instances().begin(); i != instances().end(); ++i) {
-        if ((*i)->name() > aname) {
-            instances().insert(i, this);
-            return;
-        }
+    {
+        const auto it = std::find_if(instances().begin(), instances().end(), [&](const Check *i) {
+            return i->name() == aname;
+        });
+        if (it != instances().end())
+            throw std::runtime_error("'" + aname + "' instance already exists");
     }
-    instances().push_back(this);
+
+    // make sure the instances are sorted
+    const auto it = std::find_if(instances().begin(), instances().end(), [&](const Check* i) {
+        return i->name() > aname;
+    });
+    if (it == instances().end())
+        instances().push_back(this);
+    else
+        instances().insert(it, this);
 }
 
-void Check::reportError(const ErrorMessage &errmsg)
+void Check::writeToErrorList(const ErrorMessage &errmsg)
 {
     std::cout << errmsg.toXML() << std::endl;
 }
 
 
-void Check::reportError(const std::list<const Token *> &callstack, Severity::SeverityType severity, const std::string &id, const std::string &msg, const CWE &cwe, Certainty::CertaintyLevel certainty)
+void Check::reportError(const std::list<const Token *> &callstack, Severity severity, const std::string &id, const std::string &msg, const CWE &cwe, Certainty certainty)
 {
-    const ErrorMessage errmsg(callstack, mTokenizer ? &mTokenizer->list : nullptr, severity, id, msg, cwe, certainty, mSettings ? mSettings->bugHunting : false);
+    const ErrorMessage errmsg(callstack, mTokenizer ? &mTokenizer->list : nullptr, severity, id, msg, cwe, certainty);
     if (mErrorLogger)
         mErrorLogger->reportErr(errmsg);
     else
-        reportError(errmsg);
+        writeToErrorList(errmsg);
 }
 
-void Check::reportError(const ErrorPath &errorPath, Severity::SeverityType severity, const char id[], const std::string &msg, const CWE &cwe, Certainty::CertaintyLevel certainty)
+void Check::reportError(const ErrorPath &errorPath, Severity severity, const char id[], const std::string &msg, const CWE &cwe, Certainty certainty)
 {
-    const ErrorMessage errmsg(errorPath, mTokenizer ? &mTokenizer->list : nullptr, severity, id, msg, cwe, certainty, mSettings ? mSettings->bugHunting : false);
+    const ErrorMessage errmsg(errorPath, mTokenizer ? &mTokenizer->list : nullptr, severity, id, msg, cwe, certainty);
     if (mErrorLogger)
         mErrorLogger->reportErr(errmsg);
     else
-        reportError(errmsg);
+        writeToErrorList(errmsg);
 }
 
 bool Check::wrongData(const Token *tok, const char *str)
@@ -94,20 +108,26 @@ std::string Check::getMessageId(const ValueFlow::Value &value, const char id[])
     return id;
 }
 
-ErrorPath Check::getErrorPath(const Token* errtok, const ValueFlow::Value* value, const std::string& bug) const
+ErrorPath Check::getErrorPath(const Token* errtok, const ValueFlow::Value* value, std::string bug) const
 {
     ErrorPath errorPath;
     if (!value) {
-        errorPath.emplace_back(errtok, bug);
+        errorPath.emplace_back(errtok, std::move(bug));
     } else if (mSettings->verbose || mSettings->xml || !mSettings->templateLocation.empty()) {
         errorPath = value->errorPath;
-        errorPath.emplace_back(errtok, bug);
+        errorPath.emplace_back(errtok, std::move(bug));
     } else {
         if (value->condition)
             errorPath.emplace_back(value->condition, "condition '" + value->condition->expressionString() + "'");
         //else if (!value->isKnown() || value->defaultArg)
         //    errorPath = value->callstack;
-        errorPath.emplace_back(errtok, bug);
+        errorPath.emplace_back(errtok, std::move(bug));
     }
     return errorPath;
 }
+
+void Check::logChecker(const char id[])
+{
+    reportError(nullptr, Severity::internal, "logChecker", id);
+}
+

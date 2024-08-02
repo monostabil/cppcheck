@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,34 +17,31 @@
  */
 
 #include "pathmatch.h"
-#include "testsuite.h"
+#include "fixture.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 
 class TestPathMatch : public TestFixture {
 public:
-    TestPathMatch()
-        : TestFixture("TestPathMatch")
-        , emptyMatcher(std::vector<std::string>())
-        , srcMatcher(std::vector<std::string>(1, "src/"))
-        , fooCppMatcher(std::vector<std::string>(1, "foo.cpp"))
-        , srcFooCppMatcher(std::vector<std::string>(1, "src/foo.cpp")) {}
+    TestPathMatch() : TestFixture("TestPathMatch") {}
 
 private:
-    const PathMatch emptyMatcher;
-    const PathMatch srcMatcher;
-    const PathMatch fooCppMatcher;
-    const PathMatch srcFooCppMatcher;
+    const PathMatch emptyMatcher{std::vector<std::string>()};
+    const PathMatch srcMatcher{std::vector<std::string>(1, "src/")};
+    const PathMatch fooCppMatcher{std::vector<std::string>(1, "foo.cpp")};
+    const PathMatch srcFooCppMatcher{std::vector<std::string>(1, "src/foo.cpp")};
 
-    void run() OVERRIDE {
+    void run() override {
         TEST_CASE(emptymaskemptyfile);
         TEST_CASE(emptymaskpath1);
         TEST_CASE(emptymaskpath2);
         TEST_CASE(emptymaskpath3);
         TEST_CASE(onemaskemptypath);
         TEST_CASE(onemasksamepath);
+        TEST_CASE(onemasksamepathdifferentslash);
         TEST_CASE(onemasksamepathdifferentcase);
         TEST_CASE(onemasksamepathwithfile);
         TEST_CASE(onemaskshorterpath);
@@ -84,6 +81,7 @@ private:
 
     void emptymaskpath3() const {
         ASSERT(!emptyMatcher.match("/home/user/code/src/"));
+        ASSERT(!emptyMatcher.match("d:/home/user/code/src/"));
     }
 
     // Test PathMatch containing "src/"
@@ -95,9 +93,14 @@ private:
         ASSERT(srcMatcher.match("src/"));
     }
 
+    void onemasksamepathdifferentslash() const {
+        const PathMatch srcMatcher2{std::vector<std::string>(1, "src\\")};
+        ASSERT(srcMatcher2.match("src/"));
+    }
+
     void onemasksamepathdifferentcase() const {
         std::vector<std::string> masks(1, "sRc/");
-        PathMatch match(masks, false);
+        PathMatch match(std::move(masks), false);
         ASSERT(match.match("srC/"));
     }
 
@@ -132,6 +135,7 @@ private:
 
     void onemasklongerpath1() const {
         ASSERT(srcMatcher.match("/tmp/src/"));
+        ASSERT(srcMatcher.match("d:/tmp/src/"));
     }
 
     void onemasklongerpath2() const {
@@ -144,25 +148,25 @@ private:
 
     void twomasklongerpath1() const {
         std::vector<std::string> masks = { "src/", "module/" };
-        PathMatch match(masks);
+        PathMatch match(std::move(masks));
         ASSERT(!match.match("project/"));
     }
 
     void twomasklongerpath2() const {
         std::vector<std::string> masks = { "src/", "module/" };
-        PathMatch match(masks);
+        PathMatch match(std::move(masks));
         ASSERT(match.match("project/src/"));
     }
 
     void twomasklongerpath3() const {
         std::vector<std::string> masks = { "src/", "module/" };
-        PathMatch match(masks);
+        PathMatch match(std::move(masks));
         ASSERT(match.match("project/module/"));
     }
 
     void twomasklongerpath4() const {
         std::vector<std::string> masks = { "src/", "module/" };
-        PathMatch match(masks);
+        PathMatch match(std::move(masks));
         ASSERT(match.match("project/src/module/"));
     }
 
@@ -173,7 +177,7 @@ private:
 
     void filemaskdifferentcase() const {
         std::vector<std::string> masks(1, "foo.cPp");
-        PathMatch match(masks, false);
+        PathMatch match(std::move(masks), false);
         ASSERT(match.match("fOo.cpp"));
     }
 

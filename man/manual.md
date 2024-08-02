@@ -1,6 +1,6 @@
 ---
 title: Cppcheck manual
-subtitle: Version 2.6
+subtitle: Version 2.14.99
 author: Cppcheck team
 lang: en
 documentclass: report
@@ -321,7 +321,7 @@ If you can generate a compile database, then it is possible to import that in Cp
 
 In Linux you can use for instance the `bear` (build ear) utility to generate a compile database from arbitrary build tools:
 
-    bear make
+    bear -- make
 
 # Preprocessor Settings
 
@@ -377,7 +377,7 @@ parsing the code.
 The purpose of this behaviour is that Cppcheck is meant to work without necessarily seeing the entire code. 
 Actually, it is recommended to not give all include paths. 
 While it is useful for Cppcheck to see the declaration of a class when checking the implementation of its members, 
-passing standard library headers is discouraged, because the analysis will not wor fully and lead to a longer checking 
+passing standard library headers is discouraged, because the analysis will not work fully and lead to a longer checking 
 time. For such cases, .cfg files are the preferred way to provide information about the implementation of functions and 
 types to Cppcheck, see below for more information.
 
@@ -451,10 +451,10 @@ The format for an error suppression is one of:
     [error id]:[filename2]
     [error id]
 
-The `error id` is the id that you want to suppress. The easiest way to get it is to use the --template=gcc command line flag. The id is shown in brackets.
+The `error id` is the id that you want to suppress. The id of a warning is shown in brackets in the normal cppcheck text output. The suppression `error id` may contain \* to match any sequence of tokens.
 
-The filename may include the wildcard characters \* or ?, which matches any sequence of characters or any single character respectively. 
-It is recommended to use "/" as path separator on all operating systems. The filename must match the filename in the reported warning exactly. 
+The filename may include the wildcard characters \* or ?, which matches any sequence of characters or any single character respectively.
+It is recommended to use forward-slash `/` as path separator on all operating systems. The filename must match the filename in the reported warning exactly.
 For instance, if the warning contains a relative path, then the suppression must match that relative path.
 
 ## Command line suppression
@@ -530,6 +530,41 @@ You can suppress a warning `aaaa` with:
 Suppressing multiple ids in one comment by using []:
 
     // cppcheck-suppress [aaaa, bbbb]
+
+Suppressing warnings `aaaa` on a block of code:
+
+    // cppcheck-suppress-begin aaaa
+    ...
+    // cppcheck-suppress-end aaaa
+
+Suppressing multiple ids on a block of code:
+
+    // cppcheck-suppress-begin [aaaa, bbbb]
+    ...
+    // cppcheck-suppress-end [aaaa, bbbb]
+
+Suppressing warnings `aaaa` for a whole file:
+
+    // cppcheck-suppress-file aaaa
+
+Suppressing multiple ids for a whole file:
+
+    // cppcheck-suppress-file [aaaa, bbbb]
+
+Suppressing warnings `aaaa` where macro is used:
+
+    // cppcheck-suppress-macro aaaa
+    #define MACRO ...
+    ...
+    x = MACRO; // <- aaaa warnings are suppressed here
+
+
+Suppressing multiple ids where macro is used:
+
+    // cppcheck-suppress-macro [aaaa, bbbb]
+    #define MACRO ...
+    ...
+    x = MACRO; // <- aaaa and bbbb warnings are suppressed here
 
 ### Comment before code or on same line
 
@@ -666,6 +701,10 @@ this attribute is only used when the error message is inconclusive
 **cwe**
 
 CWE ID for the problem; note that this attribute is only used when the CWE ID for the message is known
+
+**remark**
+
+Optional attribute. The related remark/justification from a remark comment.
 
 ## The `<location>` element
 
@@ -813,6 +852,10 @@ The warning message
 
 Warning id
 
+**{remark}**
+
+The remark text if a remark comment has been provided
+
 **{code}**
 
 The real code
@@ -865,6 +908,35 @@ Newline
 
 Carriage return
 
+# Justifications for warnings in the report
+
+You can add remark comments in the source code that justify why there is a warning/violation.
+
+Such a remark comment shall:
+ * start with REMARK.
+ * can either be added above the source code that generates the warning, or after the code on the same line.
+
+Example code:
+
+    void foo(void) {
+        // REMARK Initialize x with 0
+        int x = 0;
+    }
+
+In Cppcheck text output the remarks are not shown by default, you can use `--template` option `{remark}` to show remarks:
+
+    $ ./cppcheck --enable=style --template="{file}:{line}: {message} [{id}]\\n{remark}" test1.c
+    Checking test1.c ...
+    test1.c:4: Variable 'x' is assigned a value that is never used. [unreadVariable]
+    Initialize x with 0
+
+In xml output the comment text is provided in a "remark" attribute:
+
+    $ ./cppcheck --enable=style --xml test1.c
+    ....
+    remark="Initialize x with 0"
+    ....
+
 # Addons
 
 Addons are scripts that analyse Cppcheck dump files to check compatibility with secure coding standards and to locate issues.
@@ -872,10 +944,6 @@ Addons are scripts that analyse Cppcheck dump files to check compatibility with 
 Cppcheck is distributed with a few addons which are listed below.
 
 ## Supported addons
-
-### cert.py
-
-[cert.py](https://github.com/danmar/cppcheck/blob/main/addons/cert.py) checks for compliance with the safe programming standard [SEI CERT](http://www.cert.org/secure-coding/).
 
 ### misra.py
 
@@ -923,21 +991,75 @@ This allows you to create and manage multiple configuration files for different 
 
 # Library configuration
 
-When external libraries are used, such as WinAPI, POSIX, gtk, Qt, etc, Cppcheck doesn't know how the external functions behave. Cppcheck then fails to detect various problems such as memory leaks, buffer overflows, possible null pointer dereferences, etc. But this can be fixed with configuration files.
+When external libraries are used, such as WinAPI, POSIX, gtk, Qt, etc, Cppcheck has no information about functions, types, or macros contained in those libraries. Cppcheck then fails to detect various problems in the code, or might even abort the analysis. But this can be fixed by using the appropriate configuration files.
 
-Cppcheck already contains configurations for several libraries. They can be loaded as described below. Note that the configuration for the standard libraries of C and C++, std.cfg, is always loaded by cppcheck. If you create or update a configuration file for a popular library, we would appreciate if you upload it to us.
+Cppcheck already contains configurations for several libraries. They can be loaded as described below. Note that the configuration for the standard libraries of C and C++, std.cfg, is always loaded by cppcheck. If you create or update a configuration file for a popular library, we would appreciate if you supplied it to the cppcheck project.
 
-## Using your own custom .cfg file
+## Using a .cfg file
 
-You can create and use your own .cfg files for your projects. Use `--check-library` and `--enable=information` to get hints about what you should configure.
+To use a .cfg file shipped with cppcheck, pass the `--library=<lib>` option. The table below shows the currently existing libraries:
+| .cfg file  | Library | Comment |
+| ------------- | ------------- | ------------- |
+| avr.cfg | |
+| bento4.cfg | [Bento4](http://www.bento4.com/) |
+| boost.cfg | [Boost](http://www.boost.org/)|
+| bsd.cfg | [BSD](https://www.freebsd.org/) |
+| cairo.cfg | [cairo](https://www.cairographics.org/) |
+| cppcheck-lib.cfg | [Cppcheck](http://cppcheck.net/) | Used in selfcheck of the Cppcheck code base
+| cppunit.cfg | [CppUnit](https://sourceforge.net/projects/cppunit/) |
+| dpdk.cfg | |
+| embedded_sql.cfg | |
+| emscripten.cfg | |
+| ginac.cfg | |
+| gnu.cfg | [GNU](https://www.gnu.org/) |
+| googletest.cfg | [GoogleTest](https://github.com/google/googletest) |
+| gtk.cfg | [GTK](https://www.gtk.org/) |
+| icu.cfg | |
+| kde.cfg | [KDE](https://kde.org/) |
+| libcerror.cfg | [libcerror](https://github.com/libyal/libcerror) |
+| libcurl.cfg | [libcurl](https://curl.se/libcurl/) |
+| libsigc++.cfg | [libsigc++](https://github.com/libsigcplusplus/libsigcplusplus) |
+| lua.cfg | |
+| mfc.cfg | [MFC](https://learn.microsoft.com/en-us/cpp/mfc/mfc-desktop-applications) |
+| microsoft_atl.cfg | [ATL](https://learn.microsoft.com/en-us/cpp/atl/active-template-library-atl-concepts) |
+| microsoft_sal.cfg | [SAL annotations](https://learn.microsoft.com/en-us/cpp/c-runtime-library/sal-annotations) |
+| microsoft_unittest.cfg | [CppUnitTest](https://learn.microsoft.com/en-us/visualstudio/test/microsoft-visualstudio-testtools-cppunittestframework-api-reference) |
+| motif.cfg | |
+| nspr.cfg | |
+| ntl.cfg | |
+| opencv2.cfg | [OpenCV](https://opencv.org/) |
+| opengl.cfg | [OpenGL](https://opengl.org/) |
+| openmp.cfg | [OpenMP](https://www.openmp.org/) |
+| openssl.cfg | [OpenSSL](https://www.openssl.org/) |
+| pcre.cfg | [PCRE](https://pcre.org/) |
+| posix.cfg | [POSIX](https://pubs.opengroup.org/onlinepubs/9699919799/) |
+| python.cfg | |
+| qt.cfg | [Qt](https://doc.qt.io/qt.html) |
+| ruby.cfg | |
+| sdl.cfg | |
+| sfml.cfg | |
+| sqlite3.cfg | [SQLite](https://www.sqlite.org/) |
+| std.cfg | C/C++ standard library | Loaded by default
+| tinyxml2.cfg | [TinyXML-2](https://github.com/leethomason/tinyxml2) |
+| vcl.cfg | |
+| windows.cfg | [Win32 API](https://learn.microsoft.com/en-us/windows/win32/) |
+| wxsqlite3.cfg | |
+| wxsvg.cfg | |
+| wxwidgets.cfg | [wxWidgets](https://www.wxwidgets.org/) |
+| zephyr.cfg | |
+| zlib.cfg | [zlib](https://www.zlib.net) |
+
+## Creating a custom .cfg file
+
+You can create and use your own .cfg files for your projects. Use `--check-library` to get hints about what you should configure.
 
 You can use the `Library Editor` in the `Cppcheck GUI` to edit configuration files. It is available in the `View` menu.
 
-The .cfg file format is documented in the `Reference: Cppcheck .cfg format` (https://cppcheck.sf.net/reference-cfg-format.pdf) document.
+The .cfg file format is documented in the `Reference: Cppcheck .cfg format` (https://cppcheck.sourceforge.io/reference-cfg-format.pdf) document.
 
 # HTML Report
 
-You can convert the XML output from Cppcheck into a HTML report. You'll need Python and the pygments module (<http://pygments.org/)> for this to work. In the Cppcheck source tree there is a folder htmlreport that contains a script that transforms a Cppcheck XML file into HTML output.
+You can convert the XML output from Cppcheck into a HTML report. You'll need Python and the pygments module (<http://pygments.org/>) for this to work. In the Cppcheck source tree there is a folder htmlreport that contains a script that transforms a Cppcheck XML file into HTML output.
 
 This command generates the help screen:
 
@@ -961,180 +1083,110 @@ Example usage:
     ./cppcheck gui/test.cpp --xml 2> err.xml
     htmlreport/cppcheck-htmlreport --file=err.xml --report-dir=test1 --source-dir=.
 
-# Bug hunting
+# Check Level
 
-If you want to detect most bugs and can accept false alarms, then Cppcheck has analysis for that.
+## Normal
 
-This analysis is soundy; it should diagnose most bugs reported in CVEs and from dynamic analysis.
+The "normal" check level is chosen by default. Our aim is that this checking level will provide an effective checking in "reasonable" time.
 
-You have to expect false alarms. However Cppcheck tries to limit false alarms. 
-The purpose of the data flow analysis is to limit false alarms.
+The "normal" check level should be useful during active development:
+ * checking files while you edit them.
+ * block changes to the repo
+ * etc
 
-Some possible use cases;
+## Exhaustive
 
-- you are writing new code and want to ensure it is safe.
-- you are reviewing code and want to get hints about possible UB.
-- you need extra help troubleshooting a weird bug.
-- you want to check if a release candidate is safe.
+When you can wait longer for the results you can enable the "exhaustive" checking, by using the option `--check-level=exhaustive`.
 
-The intention is that this will be used primarily in the GUI.
+Exhaustive checking level should be useful for scenarios where you can wait for results. For instance:
+ * nightly builds
+ * etc
 
-## Activate this analysis
+# Speeding up analysis
 
-On the command line you can use `--bug-hunting`. In the GUI go to the project dialog. 
-In the `Analysis` tab there is a check box for `Bug hunting`.
+## Limit preprocessor configurations
 
-## Contracts
+For performance reasons it might be a good idea to limit preprocessor configurations to check.
 
-To handle false alarms and improve the analysis you are encouraged to use contracts.
+## Limit ValueFlow: max if count
 
-To provide contracts, you can either annotate your code or configure the contracts in the GUI.
+The command line option `--performance-valueflow-max-if-count` adjusts the max count for number of if in a function.
 
-There exists various annotations for C and C++ code. gcc has attributes, there
-are SAL annotations, and then there are standard C++ annotations. It is our
-goal to handle various types of annotations, if you can reuse those annotations
-in Cppcheck analysis that will be an extra benefit.
+When that limit is exceeded there is a limitation of data flow in that function. It is not drastic:
+ * Analysis of other functions are not affected.
+ * It's only for some specific data flow analysis, we have data flow analysis that is always executed.
+ * All checks are always executed. There can still be plenty of warnings in the limited function.
 
-### Function contracts
+There is data flow analysis that slows down exponentially when number of if increase. And the limit is intended to avoid that
+analysis time explodes.
 
-Here is an example code:
+## GUI options
 
-    int foo(int x)
-    {
-        return 100 / x;
-    }
+In the GUI there are various options to limit analysis.
 
-The bug hunting analysis will warn about a division by zero. Right now, it
-can't be proven that x can't be 0 here. A function contract can be used to
-tell Cppcheck what input "foo(x)" expects.
+In the GUI:
+ * Open the project dialog.
+ * In the "Analysis" tab there are several options.
 
-#### Annotation
+If you want to use these limitations on the command line also you can import the GUI project file with --project.
 
-You can use "C++ function contracts" syntax both in C and C++.
+# Cppcheck Premium
 
-For C++ code you can write:
+## Bug hunting
 
-    int foo(int x)
-    [[expects: x > 0]]
-    {
-        return 100 / x;  // No division by zero
-    }
+This is analysis that is more noisy than normal analysis. Most warnings will be false positives (cppcheck will wrongly claim that there are bugs). The design goal is to not have more than roughly 5 - 10 false positives in each file.
 
-    void bar()
-    {
-        foo(-10);  // Warning: Contract is violated!
-    }
+It is not intended to be used in normal CI or regular static analysis by developers. The noise makes it useless for that.
 
-For C code you can write (works in C++ too):
+It is intended to be used when you are looking for bugs and you really can accept noise. For example:
+ * You have developed a brand new feature and want to ensure that there are no bugs.
+ * Maybe as part of release testing your product you can run bug hunting on modified files.
+ * Etc
 
-    #ifdef __cppcheck__
-    #define Expects(EXPR) [[expects: EXPR]]
-    #else
-    #define Expects(EXPR)
-    #endif
+Technically, analysis that is "sound" will detect all bugs. Analysis that is "soundy" has the goal to detect most bugs and it tries to keep the noise at an reasonable level.
 
-    int foo(int x)
-    Expects(x > 0)
-    {
-        return 100 / x;
-    }
+The Cppcheck bug hunting analysis is "soundy".
 
-    void bar()
-    {
-        foo(-10);  // Warning: Contract is violated!
-    }
+Command:
 
+    cppcheck --premium=bughunting ....
 
-#### Configuration in gui
+## Coding standards
 
-You can configure contracts in the GUI.
+Command to active Autosar checkers:
 
-Example code:
+    cppcheck --premium=autosar ....
 
-    int foo(int x)
-    {
-        return 100 / x;
-    }
+Command to active Cert C checkers:
 
-If you run bug hunting analysis on this code, then because Cppcheck can't prove
-that x can't be 0, you will get a warning about division by zero.
+    cppcheck --premium=cert-c ....
 
-Either:
+Command to active Cert C++ checkers:
 
-- Right click on that warning and select "Edit contract..".
-- Open the "Functions" tab at the bottom and lookup the "foo(x)" function. Then
-   double click on that.
+    cppcheck --premium=cert-c++ ....
 
-A dialog box is shown where you can configure the contract for function "foo(x)".
-A textbox allows you to edit the "Expects" expression.
+Command to active Misra C++ 2008 checkers:
 
-Enter the expression "x > 0" in the dialog box and click OK.
+    cppcheck --premium=misra-c++-2008 ....
 
-Now if you run analysis the division by zero warning will be gone. As for
-annotations, if the contract is violated somewhere then you will get a warning.
+## Licenses
 
+### Individual license
 
+A license that is connected to your computer. You can check any code you want.
 
-### Variable contracts
+### LOC license
 
-Here is an example code:
+A license that allows you to run cppcheck on a limited number of lines of code. It can only be used for certain licensed paths in a repository.
 
-    int x;
+#### Running analysis
 
-    int foo()
-    {
-        return 100 / x;
-    }
+Commands:
 
-The bug hunting analysis will warn about a division by zero. It can't be proven
-that x can't be 0.
+    cd check-path
 
-A variable contract specify the allowed values for a variable. Cppcheck use variable
-contracts both when a variable is read and written:
-- When a variable is read, Cppcheck will assume that the contract is met. This
-means you can avoid false positives for impossible variable values.
-- When a variable is written, Cppcheck will ensure that its contract is not
-violated. If it can't be determined that the contract is met you will get a
-warning.
+    # Calculate lines of code and validate the license
+    premiumaddon --check-loc-license some-path/license-file > cppcheck-premium-loc
 
-#### Annotation
-
-You can use Cppcheck attributes `__cppcheck_low__(value)` and
-`__cppcheck_high__(value)` to configure min and max values for variables
-and types.
-
-Example code:
-
-    __cppcheck_low__(1) int x;
-
-    int foo()
-    {
-        return 100 / x;  // No division by zero
-    }
-
-Tip: You can create an integer type with a limited value range. For instance
-here is an unsigned integer type that can only have the values 0-100:
-
-    typedef __cppcheck_high__(100) unsigned int percent_t;
-    percent_t x;
-    x = 110; // <- Cppcheck will warn about this assignment
-
-
-#### GUI
-
-To configure variable contracts in the GUI, open the "Variables" tab at the
-bottom.
-
-Lookup the variable you want to configure and double click on that.
-
-A dialog box is shown for the variable, where you can configure the min and
-max values.
-
-
-## Incomplete analysis
-
-The data flow analysis can analyze simple functions completely but complex functions are not analyzed completely (yet). 
-The data flow analysis will be continuously improved in the future but it will never be perfect.
-
-It is likely that you will get false alarms caused by incomplete data flow analysis. Unfortunately it is unlikely that 
-such false alarms can be fixed by contracts.
+    # Run cppcheck analysis
+    cppcheck <usual cppcheck parameters>

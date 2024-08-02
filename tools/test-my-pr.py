@@ -3,9 +3,11 @@
 # Run this script from your branch with proposed Cppcheck patch to verify your
 # patch against current main. It will compare output of testing a bunch of
 # opensource packages
+# If running on Windows, make sure that git.exe, wget.exe, and MSBuild.exe are available in PATH
 
 import donate_cpu_lib as lib
 import argparse
+import glob
 import os
 import sys
 import random
@@ -19,21 +21,37 @@ def format_float(a, b=1):
 
 
 if __name__ == "__main__":
+    __my_script_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+    __work_path = os.path.expanduser(os.path.join('~', 'cppcheck-' + __my_script_name + '-workfolder'))
+
     parser = argparse.ArgumentParser(description='Run this script from your branch with proposed Cppcheck patch to verify your patch against current main. It will compare output of testing bunch of opensource packages')
     parser.add_argument('-j', default=1, type=int, help='Concurency execution threads')
-    parser.add_argument('-p', default=256, type=int, help='Count of packages to check')
+    package_group = parser.add_mutually_exclusive_group()
+    package_group.add_argument('-p', default=256, type=int, help='Count of packages to check')
+    package_group.add_argument('--packages', nargs='+', help='Check specific packages and then stop.')
+    package_group.add_argument('--packages-path', default=None, type=str, help='Check packages in path.')
     parser.add_argument('-o', default='my_check_diff.log', help='Filename of result inside a working path dir')
-    parser.add_argument('--work-path', '--work-path=', default=lib.work_path, type=str, help='Working directory for reference repo')
+
+    language_group = parser.add_mutually_exclusive_group()
+    language_group.add_argument('--c-only', dest='c_only', help='Only process c packages', action='store_true')
+    language_group.add_argument('--cpp-only', dest='cpp_only', help='Only process c++ packages', action='store_true')
+    parser.add_argument('--work-path', '--work-path=', default=__work_path, type=str, help='Working directory for reference repo')
     args = parser.parse_args()
 
     print(args)
 
+    if not lib.check_requirements():
+        print("Error: Check requirements")
+        sys.exit(1)
+
     work_path = os.path.abspath(args.work_path)
     if not os.path.exists(work_path):
         os.makedirs(work_path)
-    main_dir = os.path.join(work_path, 'cppcheck')
+    repo_dir = os.path.join(work_path, 'repo')
+    old_repo_dir = os.path.join(work_path, 'cppcheck')
+    main_dir = os.path.join(work_path, 'tree-main')
 
-    jobs = '-j' + str(args.j)
+    lib.set_jobs('-j' + str(args.j))
     result_file = os.path.join(work_path, args.o)
     (f, ext) = os.path.splitext(result_file)
     timing_file = f + '_timing' + ext
@@ -44,8 +62,16 @@ if __name__ == "__main__":
     if os.path.exists(timing_file):
         os.remove(timing_file)
 
-    if not lib.get_cppcheck(main_dir, work_path):
-        print('Failed to clone main of Cppcheck, retry later')
+    try:
+        lib.clone_cppcheck(repo_dir, old_repo_dir)
+    except Exception as e:
+        print('Failed to clone Cppcheck repository ({}), retry later'.format(e))
+        sys.exit(1)
+
+    try:
+        lib.checkout_cppcheck_version(repo_dir, 'main', main_dir)
+    except Exception as e:
+        print('Failed to checkout main ({}), retry later'.format(e))
         sys.exit(1)
 
     try:
@@ -60,45 +86,65 @@ if __name__ == "__main__":
                 'Package', 'main', 'your', 'Factor', package_width=package_width, timing_width=timing_width))
 
         os.chdir(main_dir)
+        subprocess.check_call(['git', 'fetch', '--depth=1', 'origin', commit_id])
         subprocess.check_call(['git', 'checkout', '-f', commit_id])
-    except:
+    except BaseException as e:
+        print('Error: {}'.format(e))
         print('Failed to switch to common ancestor of your branch and main')
         sys.exit(1)
 
-    if not lib.compile_cppcheck(main_dir, jobs):
+    if not lib.compile_cppcheck(main_dir):
         print('Failed to compile main of Cppcheck')
         sys.exit(1)
 
     print('Testing your PR from directory: ' + your_repo_dir)
-    if not lib.compile_cppcheck(your_repo_dir, jobs):
+    if not lib.compile_cppcheck(your_repo_dir):
         print('Failed to compile your version of Cppcheck')
         sys.exit(1)
 
-    packages_count = lib.get_packages_count(lib.server_address)
-    if not packages_count:
-        print("network or server might be temporarily down..")
-        sys.exit(1)
+    if args.packages_path:
+        # You can download packages using daca2-download.py
+        args.packages = glob.glob(os.path.join(args.packages_path, '*.tar.xz'))
+        args.p = len(args.packages)
+        packages_idxs = list(range(args.p))
+        random.shuffle(packages_idxs)
+    elif args.packages:
+        args.p = len(args.packages)
+        packages_idxs = []
+    else:
+        packages_count = lib.get_packages_count()
+        if not packages_count:
+            print("network or server might be temporarily down..")
+            sys.exit(1)
 
-    packages_idxs = list(range(packages_count))
-    random.shuffle(packages_idxs)
+        packages_idxs = list(range(packages_count))
+        random.shuffle(packages_idxs)
 
     packages_processed = 0
     crashes = []
     timeouts = []
 
-    while packages_processed < args.p and len(packages_idxs) > 0:
-        package = lib.get_package(lib.server_address, packages_idxs.pop())
+    while (packages_processed < args.p and len(packages_idxs) > 0) or args.packages:
+        if args.packages:
+            package = args.packages.pop()
+        else:
+            package = lib.get_package(packages_idxs.pop())
 
-        tgz = lib.download_package(work_path, package, None)
-        if tgz is None:
-            print("No package downloaded")
-            continue
+        if package.startswith('ftp://') or package.startswith('http://'):
+            tgz = lib.download_package(work_path, package, None)
+            if tgz is None:
+                print("No package downloaded")
+                continue
+        else:
+            print('Package: ' + package)
+            tgz = package
 
-        if not lib.unpack_package(work_path, tgz):
+        source_path, source_found = lib.unpack_package(work_path, tgz, c_only=args.c_only, cpp_only=args.cpp_only)
+        if not source_found:
             print("No files to process")
             continue
 
-        results_to_diff = []
+        results_to_diff = list()
 
         main_crashed = False
         your_crashed = False
@@ -106,8 +152,8 @@ if __name__ == "__main__":
         main_timeout = False
         your_timeout = False
 
-        libraries = lib.get_libraries()
-        c, errout, info, time_main, cppcheck_options, timing_info = lib.scan_package(work_path, main_dir, jobs, libraries)
+        libraries = lib.library_includes.get_libraries(source_path)
+        c, errout, info, time_main, cppcheck_options, timing_info = lib.scan_package(main_dir, source_path, libraries)
         if c < 0:
             if c == -101 and 'error: could not find or open any of the paths given.' in errout:
                 # No sourcefile found (for example only headers present)
@@ -120,7 +166,7 @@ if __name__ == "__main__":
                 main_crashed = True
         results_to_diff.append(errout)
 
-        c, errout, info, time_your, cppcheck_options, timing_info = lib.scan_package(work_path, your_repo_dir, jobs, libraries)
+        c, errout, info, time_your, cppcheck_options, timing_info = lib.scan_package(your_repo_dir, source_path, libraries)
         if c < 0:
             if c == -101 and 'error: could not find or open any of the paths given.' in errout:
                 # No sourcefile found (for example only headers present)
@@ -156,14 +202,16 @@ if __name__ == "__main__":
         with open(result_file, 'a') as myfile:
             myfile.write(package + '\n')
             diff = lib.diff_results('main', results_to_diff[0], 'your', results_to_diff[1])
-            if diff != '':
+            if not main_crashed and not your_crashed and diff != '':
+                myfile.write('libraries:' + ','.join(libraries) +'\n')
                 myfile.write('diff:\n' + diff + '\n')
 
-        with open(timing_file, 'a') as myfile:
-            myfile.write('{:{package_width}} {:{timing_width}} {:{timing_width}} {:{timing_width}}\n'.format(
-                package, format_float(time_main),
-                format_float(time_your), format_float(time_your, time_main),
-                package_width=package_width, timing_width=timing_width))
+        if not main_crashed and not your_crashed:
+            with open(timing_file, 'a') as myfile:
+                myfile.write('{:{package_width}} {:{timing_width}} {:{timing_width}} {:{timing_width}}\n'.format(
+                    package, format_float(time_main),
+                    format_float(time_your), format_float(time_your, time_main),
+                    package_width=package_width, timing_width=timing_width))
 
         packages_processed += 1
         print(str(packages_processed) + ' of ' + str(args.p) + ' packages processed\n')

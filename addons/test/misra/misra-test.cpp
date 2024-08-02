@@ -7,7 +7,7 @@ class C {
 
 class misra_21_1_C {
     public:
-       misra_21_1_C operator=(const misra_21_1_C &); // 8.2
+       misra_21_1_C operator=(const misra_21_1_C &);
 };
 
 class C2 {
@@ -16,9 +16,9 @@ public:
 private:
 	void* f;
 };
-C2::C2() : f(NULL) {}
+C2::C2(void) : f(NULL) {}
 
-static bool test_misra_21_1_crash(void)
+static void test_misra_21_1_crash(void)
 {
     auto misra_21_1_C a, b; // 12.3
     a = b;

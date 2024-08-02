@@ -1,12 +1,13 @@
 TEMPLATE = app
 TARGET = test-projectfile
 DEPENDPATH += .
-INCLUDEPATH += . ../../../externals/simplecpp
-OBJECTS_DIR = ../build
-MOC_DIR = ../build
+INCLUDEPATH += . ../../../externals/simplecpp ../../../externals/tinyxml2 ../../../externals/picojson
+OBJECTS_DIR = ../../temp
+MOC_DIR = ../../temp
+
 QT -= gui
 QT += core
-CONFIG += console
+QT += testlib
 
 include(../common.pri)
 
@@ -14,11 +15,8 @@ DEFINES += SRCDIR=\\\"$$PWD\\\"
 
 # tests
 SOURCES += testprojectfile.cpp \
-    ../../projectfile.cpp \
-    ../../../lib/path.cpp \
-    ../../../externals/simplecpp/simplecpp.cpp
+    ../../projectfile.cpp
 
 HEADERS += testprojectfile.h \
     ../../projectfile.h \
-    ../../../lib/path.h \
-    ../../../externals/simplecpp/simplecpp.h
+    ../../../externals/picojson/picojson.h

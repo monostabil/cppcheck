@@ -10,7 +10,7 @@
       <Extensions>cpp;c;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
   </ItemGroup>
-  <ItemGroup>
+  <ItemGroup Label="SourceFiles">
     <ClCompile Include="tokenize.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -60,6 +60,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="errortypes.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="fwdanalysis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="mathlib.cpp">
@@ -161,9 +164,6 @@
     <ClCompile Include="ctu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="exprengine.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="pathanalysis.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -182,17 +182,26 @@
     <ClCompile Include="summaries.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="bughuntingchecks.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="reverseanalyzer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="color.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="infer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="vfvalue.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="checkersreport.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="keywords.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
-  <ItemGroup>
+  <ItemGroup Label="HeaderFiles">
     <ClInclude Include="checkbufferoverrun.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -233,6 +242,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="errorlogger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="fwdanalysis.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="mathlib.h">
@@ -361,9 +373,6 @@
     <ClInclude Include="summaries.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="bughuntingchecks.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="tokenrange.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -371,6 +380,45 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="color.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="infer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="analyzer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="calculate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="forwardanalyzer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pathanalysis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="reverseanalyzer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="smallvector.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="standards.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="valueptr.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="vfvalue.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="keywords.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="checkersreport.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="json.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

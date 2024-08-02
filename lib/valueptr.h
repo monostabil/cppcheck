@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 //---------------------------------------------------------------------------
 
 #include "config.h"
-#include <functional>
+
 #include <memory>
 
 template<class T>
@@ -43,6 +43,7 @@ public:
 
     template<class U>
     // cppcheck-suppress noExplicitConstructor
+    // NOLINTNEXTLINE(google-explicit-constructor)
     ValuePtr(const U& value) : mPtr(cloner<U>::apply(&value)), mClone(&cloner<U>::apply)
     {}
 
@@ -51,11 +52,7 @@ public:
             mPtr.reset(mClone(rhs.get()));
         }
     }
-    ValuePtr(ValuePtr&& rhs) : mPtr(std::move(rhs.mPtr)), mClone(std::move(rhs.mClone)) {}
-
-    pointer release() {
-        return mPtr.release();
-    }
+    ValuePtr(ValuePtr&& rhs) NOEXCEPT : mPtr(std::move(rhs.mPtr)), mClone(std::move(rhs.mClone)) {}
 
     T* get() NOEXCEPT {
         return mPtr.get();
@@ -89,10 +86,10 @@ public:
         return *this;
     }
 
+    // NOLINTNEXTLINE(google-explicit-constructor)
     operator bool() const NOEXCEPT {
         return !!mPtr;
     }
-    ~ValuePtr() {}
 
 private:
     std::shared_ptr<T> mPtr;

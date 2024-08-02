@@ -1,4 +1,7 @@
 lessThan(QT_MAJOR_VERSION, 5): error(requires >= Qt 5 (You used: $$QT_VERSION))
+greaterThan(QT_MAJOR_VERSION, 5): error(Qt 6 is not supported via qmake - please use CMake instead)
+
+message("Building the GUI via qmake is deprecated and will be removed in a future release. Please use CMake instead.")
 
 TEMPLATE = app
 TARGET = cppcheck-gui
@@ -6,11 +9,11 @@ CONFIG += warn_on debug
 DEPENDPATH += . \
     ../lib
 INCLUDEPATH += . \
-    ../lib \
-    ../externals/z3/include
+    ../lib
 QT += widgets
 QT += printsupport
 QT += help
+QT += network
 
 # Build online help
 onlinehelp.target = online-help.qhc
@@ -27,15 +30,7 @@ contains(LINKCORE, [yY][eE][sS]) {
     LIBS += -l../bin/cppcheck-core
     DEFINES += CPPCHECKLIB_IMPORT
 }
-LIBS += -L$$PWD/../externals -L$$PWD/../externals/z3/bin
-
-# z3
-win32 {
-    LIBS += -llibz3
-} else {
-    LIBS += -lz3
-}
-QMAKE_CXXFLAGS += -DUSE_Z3
+LIBS += -L$$PWD/../externals
 
 DESTDIR = .
 RCC_DIR = temp
@@ -70,21 +65,20 @@ win32 {
 
 RESOURCES = gui.qrc
 FORMS = about.ui \
-        application.ui \
-        file.ui \
-        functioncontractdialog.ui \
+        applicationdialog.ui \
+        compliancereportdialog.ui \
+        fileview.ui \
         helpdialog.ui \
         mainwindow.ui \
-        projectfiledialog.ui \
+        projectfile.ui \
         resultsview.ui \
         scratchpad.ui \
         settings.ui \
-        stats.ui \
+        statsdialog.ui \
         librarydialog.ui \
         libraryaddfunctiondialog.ui \
         libraryeditargdialog.ui \
-        newsuppressiondialog.ui \
-        variablecontractsdialog.ui
+        newsuppressiondialog.ui
 
 TRANSLATIONS =  cppcheck_de.ts \
                 cppcheck_es.ts \
@@ -92,12 +86,14 @@ TRANSLATIONS =  cppcheck_de.ts \
                 cppcheck_fr.ts \
                 cppcheck_it.ts \
                 cppcheck_ja.ts \
+                cppcheck_ka.ts \
                 cppcheck_ko.ts \
                 cppcheck_nl.ts \
                 cppcheck_ru.ts \
                 cppcheck_sr.ts \
                 cppcheck_sv.ts \
-                cppcheck_zh_CN.ts
+                cppcheck_zh_CN.ts \
+                cppcheck_zh_TW.ts
 
 # Windows-specific options
 CONFIG += embed_manifest_exe
@@ -132,11 +128,11 @@ HEADERS += aboutdialog.h \
            codeeditstyledialog.h \
            codeeditor.h \
            common.h \
+           compliancereportdialog.h \
            csvreport.h \
            erroritem.h \
            filelist.h \
            fileviewdialog.h \
-           functioncontractdialog.h \
            helpdialog.h \
            mainwindow.h \
            platforms.h \
@@ -154,7 +150,6 @@ HEADERS += aboutdialog.h \
            threadresult.h \
            translationhandler.h \
            txtreport.h \
-           variablecontractsdialog.h \
            xmlreport.h \
            xmlreportv2.h \
            librarydialog.h \
@@ -174,11 +169,11 @@ SOURCES += aboutdialog.cpp \
            codeeditstyledialog.cpp \
            codeeditor.cpp \
            common.cpp \
+           compliancereportdialog.cpp \
            csvreport.cpp \
            erroritem.cpp \
            filelist.cpp \
            fileviewdialog.cpp \
-           functioncontractdialog.cpp \
            helpdialog.cpp \
            main.cpp \
            mainwindow.cpp\
@@ -197,7 +192,6 @@ SOURCES += aboutdialog.cpp \
            threadresult.cpp \
            translationhandler.cpp \
            txtreport.cpp \
-           variablecontractsdialog.cpp \
            xmlreport.cpp \
            xmlreportv2.cpp \
            librarydialog.cpp \
@@ -216,16 +210,15 @@ win32 {
 }
 
 contains(QMAKE_CC, gcc) {
-    QMAKE_CXXFLAGS += -std=c++0x -pedantic -Wall -Wextra -Wcast-qual -Wno-deprecated-declarations -Wfloat-equal -Wmissing-declarations -Wmissing-format-attribute -Wno-long-long -Wpacked -Wredundant-decls -Wundef -Wno-shadow -Wno-missing-field-initializers -Wno-missing-braces -Wno-sign-compare -Wno-multichar
+    QMAKE_CXXFLAGS += -std=c++17 -pedantic -Wall -Wextra -Wcast-qual -Wno-deprecated-declarations -Wfloat-equal -Wmissing-declarations -Wmissing-format-attribute -Wno-long-long -Wpacked -Wredundant-decls -Wundef -Wno-shadow -Wno-missing-field-initializers -Wno-missing-braces -Wno-sign-compare -Wno-multichar
 }
 
 contains(QMAKE_CXX, clang++) {
-    QMAKE_CXXFLAGS += -std=c++0x -pedantic -Wall -Wextra -Wcast-qual -Wno-deprecated-declarations -Wfloat-equal -Wmissing-declarations -Wmissing-format-attribute -Wno-long-long -Wpacked -Wredundant-decls -Wundef -Wno-shadow -Wno-missing-field-initializers -Wno-missing-braces -Wno-sign-compare -Wno-multichar
+    QMAKE_CXXFLAGS += -std=c++17 -pedantic -Wall -Wextra -Wcast-qual -Wno-deprecated-declarations -Wfloat-equal -Wmissing-declarations -Wmissing-format-attribute -Wno-long-long -Wpacked -Wredundant-decls -Wundef -Wno-shadow -Wno-missing-field-initializers -Wno-missing-braces -Wno-sign-compare -Wno-multichar
 }
 
 contains(HAVE_QCHART, [yY][eE][sS]) {
     QT += charts
-    DEFINES += HAVE_QCHART
 } else {
     message("Charts disabled - to enable it pass HAVE_QCHART=yes to qmake.")
 }

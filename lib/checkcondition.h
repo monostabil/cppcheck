@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,16 +26,19 @@
 #include "config.h"
 #include "mathlib.h"
 #include "errortypes.h"
-#include "utils.h"
+#include "tokenize.h"
 
 #include <set>
 #include <string>
 
 class Settings;
 class Token;
-class Tokenizer;
 class ErrorLogger;
 class ValueType;
+
+namespace ValueFlow {
+    class Value;
+}
 
 /// @addtogroup Checks
 /// @{
@@ -49,12 +52,13 @@ public:
     /** This constructor is used when registering the CheckAssignIf */
     CheckCondition() : Check(myName()) {}
 
+private:
     /** This constructor is used when running checks. */
     CheckCondition(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
         : Check(myName(), tokenizer, settings, errorLogger) {}
 
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
-        CheckCondition checkCondition(tokenizer, settings, errorLogger);
+    void runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger) override {
+        CheckCondition checkCondition(&tokenizer, &tokenizer.getSettings(), errorLogger);
         checkCondition.multiCondition();
         checkCondition.clarifyCondition();   // not simplified because ifAssign
         checkCondition.multiCondition2();
@@ -64,12 +68,12 @@ public:
         checkCondition.checkPointerAdditionResultNotNull();
         checkCondition.checkDuplicateConditionalAssign();
         checkCondition.assignIf();
-        checkCondition.alwaysTrueFalse();
         checkCondition.checkBadBitmaskCheck();
         checkCondition.comparison();
         checkCondition.checkModuloAlwaysTrueFalse();
         checkCondition.checkAssignmentInCondition();
         checkCondition.checkCompareValueOutOfTypeRange();
+        checkCondition.alwaysTrueFalse();
     }
 
     /** mismatching assignment / comparison */
@@ -125,7 +129,6 @@ public:
     /** @brief Assignment in condition */
     void checkAssignmentInCondition();
 
-private:
     // The conditions that have been diagnosed
     std::set<const Token*> mCondDiags;
     bool diag(const Token* tok, bool insert=true);
@@ -133,7 +136,7 @@ private:
     bool isOverlappingCond(const Token * const cond1, const Token * const cond2, bool pure) const;
     void assignIfError(const Token *tok1, const Token *tok2, const std::string &condition, bool result);
     void mismatchingBitAndError(const Token *tok1, const MathLib::bigint num1, const Token *tok2, const MathLib::bigint num2);
-    void badBitmaskCheckError(const Token *tok);
+    void badBitmaskCheckError(const Token *tok, bool isNoOp = false);
     void comparisonError(const Token *tok,
                          const std::string &bitop,
                          MathLib::bigint value1,
@@ -157,37 +160,35 @@ private:
 
     void clarifyConditionError(const Token *tok, bool assign, bool boolop);
 
-    void alwaysTrueFalseError(const Token *tok, const ValueFlow::Value *value);
+    void alwaysTrueFalseError(const Token* tok, const Token* condition, const ValueFlow::Value* value);
 
     void invalidTestForOverflow(const Token* tok, const ValueType *valueType, const std::string &replace);
     void pointerAdditionResultNotNullError(const Token *tok, const Token *calc);
 
-    void duplicateConditionalAssignError(const Token *condTok, const Token* assignTok);
+    void duplicateConditionalAssignError(const Token *condTok, const Token* assignTok, bool isRedundant = false);
 
     void assignmentInCondition(const Token *eq);
 
     void checkCompareValueOutOfTypeRange();
     void compareValueOutOfTypeRangeError(const Token *comparison, const std::string &type, long long value, bool result);
 
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
         CheckCondition c(nullptr, settings, errorLogger);
-
-        ErrorPath errorPath;
 
         c.assignIfError(nullptr, nullptr, emptyString, false);
         c.badBitmaskCheckError(nullptr);
         c.comparisonError(nullptr, "&", 6, "==", 1, false);
-        c.duplicateConditionError(nullptr, nullptr, errorPath);
+        c.duplicateConditionError(nullptr, nullptr, ErrorPath{});
         c.overlappingElseIfConditionError(nullptr, 1);
         c.mismatchingBitAndError(nullptr, 0xf0, nullptr, 1);
-        c.oppositeInnerConditionError(nullptr, nullptr, errorPath);
-        c.identicalInnerConditionError(nullptr, nullptr, errorPath);
-        c.identicalConditionAfterEarlyExitError(nullptr, nullptr, errorPath);
-        c.incorrectLogicOperatorError(nullptr, "foo > 3 && foo < 4", true, false, errorPath);
+        c.oppositeInnerConditionError(nullptr, nullptr, ErrorPath{});
+        c.identicalInnerConditionError(nullptr, nullptr, ErrorPath{});
+        c.identicalConditionAfterEarlyExitError(nullptr, nullptr, ErrorPath{});
+        c.incorrectLogicOperatorError(nullptr, "foo > 3 && foo < 4", true, false, ErrorPath{});
         c.redundantConditionError(nullptr, "If x > 11 the condition x > 10 is always true.", false);
         c.moduloAlwaysTrueFalseError(nullptr, "1");
         c.clarifyConditionError(nullptr, true, false);
-        c.alwaysTrueFalseError(nullptr, nullptr);
+        c.alwaysTrueFalseError(nullptr, nullptr, nullptr);
         c.invalidTestForOverflow(nullptr, nullptr, "false");
         c.pointerAdditionResultNotNullError(nullptr, nullptr);
         c.duplicateConditionalAssignError(nullptr, nullptr);
@@ -199,7 +200,7 @@ private:
         return "Condition";
     }
 
-    std::string classInfo() const OVERRIDE {
+    std::string classInfo() const override {
         return "Match conditions with assignments and other conditions:\n"
                "- Mismatching assignment and comparison => comparison is always true/false\n"
                "- Mismatching lhs and rhs in comparison => comparison is always true/false\n"

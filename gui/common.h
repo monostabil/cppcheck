@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,8 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#include <cstdint>
+
 #include <QMap>
 #include <QString>
 
@@ -36,8 +38,6 @@
 #define SETTINGS_WINDOW_MAXIMIZED       "Window maximized"
 #define SETTINGS_WINDOW_WIDTH           "Window width"
 #define SETTINGS_WINDOW_HEIGHT          "Window height"
-#define SETTINGS_LOG_VIEW_WIDTH         "Log/View width"
-#define SETTINGS_LOG_VIEW_HEIGHT        "Log/View height"
 #define SETTINGS_MAINWND_SPLITTER_STATE "Mainwindow/Vertical splitter state"
 #define SETTINGS_CHECK_DIALOG_WIDTH     "Check dialog width"
 #define SETTINGS_CHECK_DIALOG_HEIGHT    "Check dialog height"
@@ -49,6 +49,10 @@
 #define SETTINGS_TOOLBARS_MAIN_SHOW     "Toolbars/ShowStandard"
 #define SETTINGS_TOOLBARS_VIEW_SHOW     "Toolbars/ShowView"
 #define SETTINGS_TOOLBARS_FILTER_SHOW   "Toolbars/ShowFilter"
+
+// Report type
+#define SETTINGS_REPORT_TYPE            "Report type"
+enum class ReportType : std::uint8_t { normal=0, autosar=1, certC=2, certCpp=3, misraC=4, misraCpp2008=5, misraCpp2023=6 };
 
 // Show * states
 #define SETTINGS_SHOW_STYLE             "Show style"
@@ -89,6 +93,8 @@
 #define SETTINGS_SHOW_ERROR_ID          "Show error Id"
 #define SETTINGS_SHOW_STATISTICS        "Show statistics"
 #define SETTINGS_OPEN_PROJECT           "Open Project"
+#define SETTINGS_CHECK_VERSION          "Check Version"
+#define SETTINGS_CHECK_FOR_UPDATES      "Check for updates"
 
 // The maximum value for the progress bar
 #define PROGRESS_MAX                    1024.0
@@ -99,7 +105,6 @@
 #define SETTINGS_LAST_PROJECT_PATH      "Last project path"
 #define SETTINGS_LAST_RESULT_PATH       "Last result path"
 #define SETTINGS_LAST_SOURCE_PATH       "Last source path"
-#define SETTINGS_LAST_INCLUDE_PATH      "Last include path"
 #define SETTINGS_LAST_APP_PATH          "Last application path"
 
 #define SETTINGS_LAST_ANALYZE_FILES_FILTER  "Last analyze files filter"

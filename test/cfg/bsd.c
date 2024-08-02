@@ -1,15 +1,33 @@
 // Test library configuration for bsd.cfg
 //
 // Usage:
-// $ cppcheck --library=bsd --check-library --enable=information --error-exitcode=1 --suppress=missingIncludeSystem --inline-suppr test/cfg/bsd.c
+// $ cppcheck --check-library --library=bsd --enable=style,information --inconclusive --error-exitcode=1 --disable=missingInclude --inline-suppr test/cfg/bsd.c
 // =>
 // No warnings about bad library configuration, unmatched suppressions, etc. exitcode=0
 //
+
+// cppcheck-suppress-file valueFlowBailout
 
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <sys/time.h>
+#include <sys/uio.h>
+
+void nullPointer_setbuffer(FILE *stream, char *buf, size_t size)
+{
+    // cppcheck-suppress nullPointer
+    (void) setbuffer(NULL, buf, size);
+    (void) setbuffer(stream, NULL, size);
+    (void) setbuffer(stream, buf, size);
+}
+
+void nullPointer_setlinebuf(FILE *stream)
+{
+    // cppcheck-suppress nullPointer
+    (void)setlinebuf(NULL);
+    (void)setlinebuf(stream);
+}
 
 // #9323, #9331
 void verify_timercmp(struct timeval t)
@@ -20,6 +38,34 @@ void verify_timercmp(struct timeval t)
     (void)timercmp(&t, &t, !=);
     (void)timercmp(&t, &t, >=);
     (void)timercmp(&t, &t, >);
+}
+
+ssize_t nullPointer_readv(int fd, const struct iovec *iov, int iovcnt)
+{
+    // cppcheck-suppress nullPointer
+    (void)readv(fd,NULL,iovcnt);
+    return readv(fd,iov,iovcnt);
+}
+
+ssize_t nullPointer_writev(int fd, const struct iovec *iov, int iovcnt)
+{
+    // cppcheck-suppress nullPointer
+    (void)writev(fd,NULL,iovcnt);
+    return writev(fd,iov,iovcnt);
+}
+
+ssize_t nullPointer_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+{
+    // cppcheck-suppress nullPointer
+    (void)preadv(fd,NULL,iovcnt,offset);
+    return preadv(fd,iov,iovcnt,offset);
+}
+
+ssize_t nullPointer_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+{
+    // cppcheck-suppress nullPointer
+    (void)pwritev(fd,NULL,iovcnt,offset);
+    return pwritev(fd,iov,iovcnt,offset);
 }
 
 // False negative: #9346
@@ -33,6 +79,7 @@ void uninitvar_timercmp(struct timeval t)
 
 void nullPointer_timercmp(struct timeval t)
 {
+    // cppcheck-suppress constVariablePointer
     struct timeval *p=0;
     // cppcheck-suppress nullPointer
     (void)timercmp(&t, p, <);
@@ -98,4 +145,31 @@ void uninitvar(void)
 
     // cppcheck-suppress uninitvar
     (void) arc4random_uniform(uint32Uninit);
+}
+
+void arrayIndexOutOfBounds(void)
+{
+    char * pAlloc = calloc(2, 3);
+    pAlloc[5] = 'a';
+    // cppcheck-suppress arrayIndexOutOfBounds
+    pAlloc[6] = 1;
+    // cppcheck-suppress memleakOnRealloc
+    pAlloc = reallocarray(pAlloc, 3, 3);
+    pAlloc[8] = 'a';
+    // cppcheck-suppress arrayIndexOutOfBounds
+    pAlloc[9] = 1;
+    free(pAlloc);
+}
+
+void reallocarray_memleak(void) {
+    char *a = (char *)malloc(10);
+    // cppcheck-suppress [memleakOnRealloc, unreadVariable]
+    a = reallocarray(a, 100, 2);
+    // cppcheck-suppress memleak
+}
+
+void reallocarray_notused(void)
+{
+    // cppcheck-suppress [leakReturnValNotUsed, ignoredReturnValue]
+    reallocarray(NULL, 10, 10);
 }

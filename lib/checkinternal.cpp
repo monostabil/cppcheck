@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,8 +25,9 @@
 #include "token.h"
 #include "tokenize.h"
 
-#include <set>
 #include <cstring>
+#include <set>
+#include <vector>
 
 // Register this check class (by creating a static instance of it).
 // Disabled in release builds
@@ -61,7 +62,7 @@ void CheckInternal::checkTokenMatchPatterns()
             // Check for signs of complex patterns
             if (pattern.find_first_of("[|") != std::string::npos)
                 continue;
-            else if (pattern.find("!!") != std::string::npos)
+            if (pattern.find("!!") != std::string::npos)
                 continue;
 
             bool complex = false;
@@ -149,7 +150,7 @@ void CheckInternal::checkTokenSimpleMatchPatterns()
 
             // Check for [xyz] usage - but exclude standalone square brackets
             unsigned int char_count = 0;
-            for (char c : pattern) {
+            for (const char c : pattern) {
                 if (c == ' ') {
                     char_count = 0;
                 } else if (c == ']') {
@@ -164,7 +165,7 @@ void CheckInternal::checkTokenSimpleMatchPatterns()
 
             // Check | usage: Count characters before the symbol
             char_count = 0;
-            for (char c : pattern) {
+            for (const char c : pattern) {
                 if (c == ' ') {
                     char_count = 0;
                 } else if (c == '|') {
@@ -227,9 +228,9 @@ void CheckInternal::checkMissingPercentCharacter()
 
             const std::string pattern = patternTok->strValue();
 
-            std::set<std::string>::const_iterator knownPattern, knownPatternsEnd = knownPatterns.end();
-            for (knownPattern = knownPatterns.begin(); knownPattern != knownPatternsEnd; ++knownPattern) {
-                const std::string brokenPattern = (*knownPattern).substr(0, (*knownPattern).size() - 1);
+            std::set<std::string>::const_iterator knownPattern, knownPatternsEnd = knownPatterns.cend();
+            for (knownPattern = knownPatterns.cbegin(); knownPattern != knownPatternsEnd; ++knownPattern) {
+                const std::string brokenPattern = knownPattern->substr(0, knownPattern->size() - 1);
 
                 std::string::size_type pos = 0;
                 while ((pos = pattern.find(brokenPattern, pos)) != std::string::npos) {
@@ -295,20 +296,12 @@ void CheckInternal::checkRedundantNextPrevious()
                 continue;
             tok = tok->next();
 
-            if (Token::Match(tok, "previous ( ) . next|tokAt|strAt|linkAt (") || Token::Match(tok, "next ( ) . previous|tokAt|strAt|linkAt (") ||
+            if (Token::Match(tok, "previous ( ) . previous|next|tokAt|str|strAt|link|linkAt (") || Token::Match(tok, "next ( ) . previous|next|tokAt|str|strAt|link|linkAt (") ||
                 (Token::simpleMatch(tok, "tokAt (") && Token::Match(tok->linkAt(1), ") . previous|next|tokAt|strAt|linkAt|str|link ("))) {
                 const std::string& func1 = tok->str();
                 const std::string& func2 = tok->linkAt(1)->strAt(2);
 
                 if ((func2 == "previous" || func2 == "next" || func2 == "str" || func2 == "link") && tok->linkAt(1)->strAt(4) != ")")
-                    continue;
-
-                redundantNextPreviousError(tok, func1, func2);
-            } else if (Token::Match(tok, "next|previous ( ) . next|previous ( ) . next|previous|linkAt|strAt|link|str (")) {
-                const std::string& func1 = tok->str();
-                const std::string& func2 = tok->strAt(8);
-
-                if ((func2 == "previous" || func2 == "next" || func2 == "str" || func2 == "link") && tok->strAt(10) != ")")
                     continue;
 
                 redundantNextPreviousError(tok, func1, func2);
@@ -333,25 +326,12 @@ void CheckInternal::checkExtraWhitespace()
                 continue;
 
             const std::string pattern = patternTok->strValue();
-            if (!pattern.empty() && (pattern[0] == ' ' || *pattern.rbegin() == ' '))
+            if (!pattern.empty() && (pattern[0] == ' ' || *pattern.crbegin() == ' '))
                 extraWhitespaceError(tok, pattern, funcname);
 
             // two whitespaces or more
             if (pattern.find("  ") != std::string::npos)
                 extraWhitespaceError(tok, pattern, funcname);
-        }
-    }
-}
-
-void CheckInternal::checkStlUsage()
-{
-    const SymbolDatabase *symbolDatabase = mTokenizer->getSymbolDatabase();
-    for (const Scope *scope : symbolDatabase->functionScopes) {
-        for (const Token* tok = scope->bodyStart->next(); tok != scope->bodyEnd; tok = tok->next()) {
-            if (Token::simpleMatch(tok, ". emplace ("))
-                reportError(tok, Severity::error, "internalStlUsage", "The 'emplace' function shall be avoided for now. It is not available e.g. in Slackware 14.0. 'emplace_back' is fine.");
-            //if (Token::simpleMatch(tok, ". back ( )") && tok->astOperand1() && tok->astOperand1()->valueType() && tok->astOperand1()->valueType()->container && Token::simpleMatch(tok->astOperand1()->valueType()->container, "std :: string"))
-            //  reportError(tok, Severity::error, "internalStlUsage", "The 'std::string::back()' function shall be avoided for now.");
         }
     }
 }

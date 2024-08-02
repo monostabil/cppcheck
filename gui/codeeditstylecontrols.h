@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2019 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,21 +22,25 @@
 #ifndef CODEEDITORSTYLECONTROLS_H
 #define CODEEDITORSTYLECONTROLS_H
 
-#include <QPushButton>
-#include <QComboBox>
 #include <QColor>
+#include <QComboBox>
 #include <QFont>
+#include <QObject>
+#include <QPushButton>
+#include <QString>
+
+class QWidget;
 
 class SelectColorButton : public QPushButton {
     Q_OBJECT
 public:
     explicit SelectColorButton(QWidget* parent);
-    virtual ~SelectColorButton() {}
 
     void setColor(const QColor& color);
     const QColor& getColor();
 
 signals:
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void colorChanged(const QColor& newColor);
 
 public slots:
@@ -52,20 +56,20 @@ class SelectFontWeightCombo : public QComboBox {
     Q_OBJECT
 public:
     explicit SelectFontWeightCombo(QWidget* parent);
-    virtual ~SelectFontWeightCombo() {}
 
-    void setWeight(const QFont::Weight& weight);
+    void setWeight(QFont::Weight weight);
     const QFont::Weight& getWeight();
 
 signals:
-    void weightChanged(const QFont::Weight& newWeight);
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
+    void weightChanged(QFont::Weight newWeight);
 
 public slots:
     void updateWeight();
     void changeWeight(int index);
 
 private:
-    QFont::Weight mWeight;
+    QFont::Weight mWeight = QFont::Normal;
 };
 
 #endif  //CODEEDITORSTYLECONTROLS_H

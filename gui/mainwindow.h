@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,22 +19,36 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <QMainWindow>
-#include <QFileDialog>
-#include <QStringList>
-
-#include "settings.h"
+#include "library.h"
 #include "platforms.h"
-#include "ui_mainwindow.h"
+
+#include <cstdint>
+
+#include <QFileDialog>
+#include <QMainWindow>
+#include <QObject>
+#include <QPair>
+#include <QString>
+#include <QStringList>
 
 class ThreadHandler;
 class TranslationHandler;
 class ScratchPad;
 class ProjectFile;
+class ApplicationList;
 class QAction;
 class QActionGroup;
 class QSettings;
 class QTimer;
+class QLineEdit;
+class ImportProject;
+class QCloseEvent;
+class QNetworkAccessManager;
+class QNetworkReply;
+class Settings;
+namespace Ui {
+    class MainWindow;
+}
 
 /// @addtogroup GUI
 /// @{
@@ -50,11 +64,11 @@ public:
     /**
      * @brief Maximum number of MRU project items in File-menu.
      */
-    enum { MaxRecentProjects = 5 };
+    enum : std::uint8_t { MaxRecentProjects = 5 };
 
     MainWindow(TranslationHandler* th, QSettings* settings);
     MainWindow(const MainWindow &) = delete;
-    virtual ~MainWindow();
+    ~MainWindow() override;
     MainWindow &operator=(const MainWindow &) = delete;
 
     /**
@@ -71,13 +85,6 @@ public:
     void analyzeCode(const QString& code, const QString& filename);
 
 public slots:
-
-    /** Update "Functions" tab */
-    void updateFunctionContractsTab();
-
-    /** Update "Variables" tab */
-    void updateVariableContractsTab();
-
     /** @brief Slot for analyze files menu item */
     void analyzeFiles();
 
@@ -165,6 +172,9 @@ public slots:
     /** @brief Slot to save results */
     void save();
 
+    /** @brief Slot to generate compliance report */
+    void complianceReport();
+
     /** @brief Slot to create new project file */
     void newProjectFile();
 
@@ -186,7 +196,7 @@ public slots:
     /** @brief Slot for showing the library editor */
     void showLibraryEditor();
 
-protected slots:
+private slots:
 
     /** @brief Slot for checkthread's done signal */
     void analysisDone();
@@ -227,19 +237,15 @@ protected slots:
     /** Suppress error ids */
     void suppressIds(QStringList ids);
 
-    /** Edit contract for function */
-    void editFunctionContract(QString function);
+private slots:
+    void replyFinished(QNetworkReply *reply);
 
-    /** Edit constraints for variable */
-    void editVariableContract(QString var);
+    void hideInformation();
 
-    /** Delete contract for function */
-    void deleteFunctionContract(QString function);
-
-    /** Edit constraints for variable */
-    void deleteVariableContract(QString var);
-
+    void changeReportType();
 private:
+
+    bool isCppcheckPremium() const;
 
     /** Get filename for last results */
     QString getLastResults() const;
@@ -251,7 +257,7 @@ private:
      * @brief Reanalyze selected files
      * @param files list of selected files
      */
-    void reAnalyzeSelected(QStringList files);
+    void reAnalyzeSelected(const QStringList& files);
 
     /**
      * @brief Analyze the project.
@@ -268,7 +274,7 @@ private:
     void setLanguage(const QString &code);
 
     /** @brief Event coming when application is about to close. */
-    virtual void closeEvent(QCloseEvent *event);
+    void closeEvent(QCloseEvent *event) override;
 
     /**
      * @brief Helper function to toggle all show error menu items
@@ -314,7 +320,7 @@ private:
      *
      * @return Default cppcheck settings
      */
-    Settings getCppcheckSettings();
+    QPair<bool, Settings> getCppcheckSettings();
 
     /** @brief Load program settings */
     void loadSettings();
@@ -329,7 +335,7 @@ private:
     void formatAndSetTitle(const QString &text = QString());
 
     /** @brief Show help contents */
-    void openOnlineHelp();
+    static void openOnlineHelp();
 
     /**
      * @brief Enable or disable project file actions.
@@ -390,7 +396,7 @@ private:
      * @param filename filename (no path)
      * @return error code
      */
-    Library::Error loadLibrary(Library *library, const QString &filename);
+    Library::Error loadLibrary(Library &library, const QString &filename);
 
     /**
      * @brief Tries to load library file, prints message on error
@@ -398,7 +404,9 @@ private:
      * @param filename filename (no path)
      * @return True if no error
      */
-    bool tryLoadLibrary(Library *library, const QString& filename);
+    bool tryLoadLibrary(Library &library, const QString& filename);
+
+    QString loadAddon(Settings &settings, const QString &filesDir, const QString &pythonCmd, const QString& addon);
 
     /**
      * @brief Update project MRU items in File-menu.
@@ -430,16 +438,16 @@ private:
     TranslationHandler *mTranslation;
 
     /** @brief Class holding all UI components */
-    Ui::MainWindow mUI;
+    Ui::MainWindow *mUI;
 
     /** @brief Current analyzed directory. */
     QString mCurrentDirectory;
 
     /** @brief Scratchpad. */
-    ScratchPad* mScratchPad;
+    ScratchPad* mScratchPad{};
 
     /** @brief Project (file). */
-    ProjectFile *mProjectFile;
+    ProjectFile* mProjectFile{};
 
     /** @brief Filter field in the Filter toolbar. */
     QLineEdit* mLineEditFilter;
@@ -456,21 +464,29 @@ private:
     /** @brief GUI actions for selecting language. */
     QActionGroup *mSelectLanguageActions;
 
+    /** @brief GUI actions for selecting report. */
+    QActionGroup *mSelectReportActions;
+
     /**
      * @brief Are we exiting the cppcheck?
      * If this is true then the cppcheck is waiting for check threads to exit
      * so that the application can be closed.
      */
-    bool mExiting;
+    bool mExiting{};
 
     /** @brief Set to true in case of loading log file. */
-    bool mIsLogfileLoaded;
+    bool mIsLogfileLoaded{};
 
     /**
      * @brief Project MRU menu actions.
      * List of MRU menu actions. Needs also to store the separator.
      */
     QAction *mRecentProjectActs[MaxRecentProjects + 1];
+
+    QString mCppcheckCfgAbout;
+    QString mCppcheckCfgProductName;
+
+    QNetworkAccessManager *mNetworkAccessManager = nullptr;
 };
 /// @}
 #endif // MAINWINDOW_H

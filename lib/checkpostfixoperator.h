@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,30 +40,32 @@ class Token;
  */
 
 class CPPCHECKLIB CheckPostfixOperator : public Check {
+    friend class TestPostfixOperator;
+
 public:
     /** This constructor is used when registering the CheckPostfixOperator */
     CheckPostfixOperator() : Check(myName()) {}
 
+private:
     /** This constructor is used when running checks. */
     CheckPostfixOperator(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
         : Check(myName(), tokenizer, settings, errorLogger) {}
 
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
-        if (tokenizer->isC())
+    void runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger) override {
+        if (tokenizer.isC())
             return;
 
-        CheckPostfixOperator checkPostfixOperator(tokenizer, settings, errorLogger);
+        CheckPostfixOperator checkPostfixOperator(&tokenizer, &tokenizer.getSettings(), errorLogger);
         checkPostfixOperator.postfixOperator();
     }
 
     /** Check postfix operators */
     void postfixOperator();
 
-private:
     /** Report Error */
     void postfixOperatorError(const Token *tok);
 
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
         CheckPostfixOperator c(nullptr, settings, errorLogger);
         c.postfixOperatorError(nullptr);
     }
@@ -72,7 +74,7 @@ private:
         return "Using postfix operators";
     }
 
-    std::string classInfo() const OVERRIDE {
+    std::string classInfo() const override {
         return "Warn if using postfix operators ++ or -- rather than prefix operator\n";
     }
 };

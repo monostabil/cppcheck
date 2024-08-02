@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2019 Cppcheck team.
+ * Copyright (C) 2007-2021 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,15 +16,24 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <QtTest/QtTest>
 #include <QObject>
+#include <QString>
 
 class TestProjectFile : public QObject {
     Q_OBJECT
 
 private slots:
-    void loadInexisting();
-    void loadSimple();
-    void loadSimpleWithIgnore();
-    void loadSimpleNoroot();
+    void loadInexisting() const;
+    void loadSimple() const;
+    void loadSimpleWithIgnore() const;
+    void loadSimpleNoroot() const;
+
+    void getAddonFilePath() const;
+
+    void getInlineSuppressionDefaultValue() const;
+    void getInlineSuppression() const;
+
+    void getCheckingSuppressionsRelative() const;
+    void getCheckingSuppressionsAbsolute() const;
+    void getCheckingSuppressionsStar() const;
 };

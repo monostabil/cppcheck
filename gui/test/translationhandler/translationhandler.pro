@@ -2,13 +2,21 @@ TEMPLATE = app
 TARGET = test-translationhandler
 DEPENDPATH += .
 INCLUDEPATH += .
-OBJECTS_DIR = ../build
-MOC_DIR = ../build
-QT += widgets
+OBJECTS_DIR = ../../temp
+MOC_DIR = ../../temp
+
+QT -= gui
+QT += core
+QT += widgets # TODO: get rid of this - causes X server dependency
+QT += testlib
 
 include(../common.pri)
 
 # tests
-SOURCES += testtranslationhandler.cpp
+SOURCES += testtranslationhandler.cpp \
+    ../../translationhandler.cpp \
+    ../../common.cpp
 
-HEADERS += testtranslationhandler.h
+HEADERS += testtranslationhandler.h \
+    ../../translationhandler.h \
+    ../../common.h

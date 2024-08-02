@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,18 +20,24 @@
 #ifndef THREADHANDLER_H
 #define THREADHANDLER_H
 
-#include <QObject>
-#include <QStringList>
-#include <QDateTime>
-#include <set>
-#include "threadresult.h"
 #include "suppressions.h"
+#include "threadresult.h"
+
+#include <set>
+
+#include <QDateTime>
+#include <QElapsedTimer>
+#include <QList>
+#include <QObject>
+#include <QString>
+#include <QStringList>
 
 class ResultsView;
 class CheckThread;
 class QSettings;
 class Settings;
 class ImportProject;
+class ErrorItem;
 
 /// @addtogroup GUI
 /// @{
@@ -45,7 +51,7 @@ class ThreadHandler : public QObject {
     Q_OBJECT
 public:
     explicit ThreadHandler(QObject *parent = nullptr);
-    virtual ~ThreadHandler();
+    ~ThreadHandler() override;
 
     /**
      * @brief Set the number of threads to use
@@ -58,7 +64,7 @@ public:
      *
      * @param view View to show error results
      */
-    void initialize(ResultsView *view);
+    void initialize(const ResultsView *view);
 
     /**
      * @brief Load settings
@@ -76,16 +82,12 @@ public:
         mAddonsAndTools = addonsAndTools;
     }
 
-    void setSuppressions(const QList<Suppressions::Suppression> &s) {
+    void setSuppressions(const QList<SuppressionList::Suppression> &s) {
         mSuppressions = s;
     }
 
     void setClangIncludePaths(const QStringList &s) {
         mClangIncludePaths = s;
-    }
-
-    void setDataDir(const QString &dataDir) {
-        mDataDir = dataDir;
     }
 
     /**
@@ -184,11 +186,11 @@ signals:
      */
     void done();
 
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void log(const QString &msg);
 
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void debugError(const ErrorItem &item);
-
-    void bughuntingReportLine(QString line);
 
 public slots:
 
@@ -222,13 +224,13 @@ protected:
      * @brief Timer used for measuring scan duration
      *
      */
-    QTime mTime;
+    QElapsedTimer mTimer;
 
     /**
      * @brief The previous scan duration in milliseconds.
      *
      */
-    int mScanDuration;
+    int mScanDuration{};
 
     /**
      * @brief Function to delete all threads
@@ -252,15 +254,13 @@ protected:
      * @brief The amount of threads currently running
      *
      */
-    int mRunningThreadCount;
+    int mRunningThreadCount{};
 
-    bool mAnalyseWholeProgram;
+    bool mAnalyseWholeProgram{};
 
     QStringList mAddonsAndTools;
-    QList<Suppressions::Suppression> mSuppressions;
+    QList<SuppressionList::Suppression> mSuppressions;
     QStringList mClangIncludePaths;
-
-    QString mDataDir;
 private:
 
     /**

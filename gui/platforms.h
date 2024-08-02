@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,10 +19,11 @@
 #ifndef PLATFORMS_H
 #define PLATFORMS_H
 
+#include "platform.h"
+
+#include <QList>
 #include <QObject>
 #include <QString>
-#include <QList>
-#include "settings.h"
 
 class QAction;
 
@@ -32,9 +33,9 @@ class QAction;
 /**
  * @brief Checked platform GUI-data.
  */
-struct Platform {
+struct PlatformData {
     QString mTitle;  /**< Text visible in the GUI. */
-    Settings::PlatformType mType; /**< Type in the core. */
+    Platform::Type mType; /**< Type in the core. */
     QAction *mActMainWindow; /**< Pointer to main window action item. */
 };
 
@@ -46,12 +47,12 @@ class Platforms : public QObject {
 
 public:
     explicit Platforms(QObject *parent = nullptr);
-    void add(const QString &title, Settings::PlatformType platform);
+    void add(const QString &title, Platform::Type platform);
     int getCount() const;
     void init();
-    Platform& get(Settings::PlatformType platform);
+    PlatformData& get(Platform::Type platform);
 
-    QList<Platform> mPlatforms;
+    QList<PlatformData> mPlatforms;
 };
 
 /// @}

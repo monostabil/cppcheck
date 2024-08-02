@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,9 @@
 
 #include "check.h"
 #include "config.h"
+#include "tokenize.h"
 
+#include <list>
 #include <map>
 #include <string>
 
@@ -31,7 +33,6 @@ class ErrorLogger;
 class Scope;
 class Settings;
 class Token;
-class Tokenizer;
 class Type;
 class Variables;
 class Variable;
@@ -44,17 +45,20 @@ class Function;
 /** @brief Various small checks */
 
 class CPPCHECKLIB CheckUnusedVar : public Check {
+    friend class TestUnusedVar;
+
 public:
     /** @brief This constructor is used when registering the CheckClass */
     CheckUnusedVar() : Check(myName()) {}
 
+private:
     /** @brief This constructor is used when running checks. */
     CheckUnusedVar(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
         : Check(myName(), tokenizer, settings, errorLogger) {}
 
     /** @brief Run checks against the normal token list */
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
-        CheckUnusedVar checkUnusedVar(tokenizer, settings, errorLogger);
+    void runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger) override {
+        CheckUnusedVar checkUnusedVar(&tokenizer, &tokenizer.getSettings(), errorLogger);
 
         // Coding style checks
         checkUnusedVar.checkStructMemberUsage();
@@ -68,24 +72,21 @@ public:
     /** @brief %Check that all struct members are used */
     void checkStructMemberUsage();
 
-private:
     bool isRecordTypeWithoutSideEffects(const Type* type);
-    bool isVariableWithoutSideEffects(const Variable& var);
+    bool isVariableWithoutSideEffects(const Variable& var, const Type* type = nullptr);
     bool isEmptyType(const Type* type);
     bool isFunctionWithoutSideEffects(const Function& func, const Token* functionUsageToken,
                                       std::list<const Function*> checkedFuncs);
 
     // Error messages..
-    void unusedStructMemberError(const Token *tok, const std::string &structname, const std::string &varname, bool isUnion = false);
+    void unusedStructMemberError(const Token *tok, const std::string &structname, const std::string &varname, const std::string& prefix = "struct");
     void unusedVariableError(const Token *tok, const std::string &varname);
     void allocatedButUnusedVariableError(const Token *tok, const std::string &varname);
     void unreadVariableError(const Token *tok, const std::string &varname, bool modified);
     void unassignedVariableError(const Token *tok, const std::string &varname);
 
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
         CheckUnusedVar c(nullptr, settings, errorLogger);
-
-        // style/warning
         c.unusedVariableError(nullptr, "varname");
         c.allocatedButUnusedVariableError(nullptr, "varname");
         c.unreadVariableError(nullptr, "varname", false);
@@ -97,7 +98,7 @@ private:
         return "UnusedVar";
     }
 
-    std::string classInfo() const OVERRIDE {
+    std::string classInfo() const override {
         return "UnusedVar checks\n"
 
                // style

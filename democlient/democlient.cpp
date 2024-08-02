@@ -1,3 +1,21 @@
+/*
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2023 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
@@ -5,6 +23,7 @@
 #include <iostream>
 
 #include "cppcheck.h"
+#include "filesettings.h"
 #include "version.h"
 
 static void unencode(const char *src, char *dest)
@@ -41,12 +60,10 @@ public:
     }
 
     void run(const char code[]) {
-        cppcheck.check("test.cpp", code);
+        cppcheck.check(FileWithDetails("test.cpp"), code);
     }
 
-    void bughuntingReport(const std::string&) override {}
-
-    void reportOut(const std::string &outmsg, Color c) override {}
+    void reportOut(const std::string & /*outmsg*/, Color /*c*/) override {}
     void reportErr(const ErrorMessage &msg) override {
         const std::string s = msg.toString(true);
 
@@ -56,9 +73,9 @@ public:
             std::fprintf(logfile, "%s\n", s.c_str());
     }
 
-    void reportProgress(const std::string& filename,
-                        const char stage[],
-                        const std::size_t value) override {
+    void reportProgress(const std::string& /*filename*/,
+                        const char /*stage*/[],
+                        const std::size_t /*value*/) override {
         if (std::time(nullptr) >= stoptime) {
             std::cout << "Time to analyse the code exceeded 2 seconds. Terminating.\n\n";
             Settings::terminate();

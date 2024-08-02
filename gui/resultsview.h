@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,17 +20,27 @@
 #ifndef RESULTSVIEW_H
 #define RESULTSVIEW_H
 
-
 #include "report.h"
 #include "showtypes.h"
-#include "ui_resultsview.h"
+
+#include <QObject>
+#include <QString>
+#include <QStringList>
+#include <QWidget>
 
 class ErrorItem;
+class Settings;
 class ApplicationList;
+class ThreadHandler;
 class QModelIndex;
 class QPrinter;
 class QSettings;
 class CheckStatistics;
+class QPoint;
+enum class ReportType : std::uint8_t;
+namespace Ui {
+    class ResultsView;
+}
 
 /// @addtogroup GUI
 /// @{
@@ -46,11 +56,8 @@ public:
     explicit ResultsView(QWidget * parent = nullptr);
     void initialize(QSettings *settings, ApplicationList *list, ThreadHandler *checkThreadHandler);
     ResultsView(const ResultsView &) = delete;
-    virtual ~ResultsView();
+    ~ResultsView() override;
     ResultsView &operator=(const ResultsView &) = delete;
-
-    void setAddedFunctionContracts(const QStringList &addedContracts);
-    void setAddedVariableContracts(const QStringList &added);
 
     /**
      * @brief Clear results and statistics and reset progressinfo.
@@ -68,9 +75,6 @@ public:
      */
     void clearRecheckFile(const QString &filename);
 
-    /** Clear the contracts */
-    void clearContracts();
-
     /**
      * @brief Write statistics in file
      *
@@ -83,8 +87,9 @@ public:
      *
      * @param filename Filename to save results to
      * @param type Type of the report.
+     * @param productName Custom product name
      */
-    void save(const QString &filename, Report::Type type) const;
+    void save(const QString &filename, Report::Type type, const QString& productName) const;
 
     /**
      * @brief Update results from old report (tag, sinceDate)
@@ -135,6 +140,11 @@ public:
     QString getCheckDirectory();
 
     /**
+     * Set settings used in checking
+     */
+    void setCheckSettings(const Settings& settings);
+
+    /**
      * @brief Inform the view that checking has started
      *
      * @param count Count of files to be checked.
@@ -174,6 +184,17 @@ public:
      */
     void translate();
 
+    /**
+     * @brief This function should be called when analysis is stopped
+     */
+    void stopAnalysis();
+
+    /**
+     * @brief Are there successful results?
+     * @return true if analysis finished without critical errors etc
+     */
+    bool isSuccess() const;
+
     void disableProgressbar();
 
     /**
@@ -187,7 +208,7 @@ public:
      * @brief Return checking statistics.
      * @return Pointer to checking statistics.
      */
-    CheckStatistics *getStatistics() const {
+    const CheckStatistics *getStatistics() const {
         return mStatistics;
     }
 
@@ -195,12 +216,9 @@ public:
      * @brief Return Showtypes.
      * @return Pointer to Showtypes.
      */
-    ShowTypes * getShowTypes() const {
-        return &mUI.mTree->mShowSeverities;
-    }
+    const ShowTypes & getShowTypes() const;
 
-    /** Show/hide the contract tabs */
-    void showContracts(bool visible);
+    void setReportType(ReportType reportType);
 
 signals:
 
@@ -215,6 +233,7 @@ signals:
      *
      * @param hidden true if there are some hidden results, or false if there are not
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void resultsHidden(bool hidden);
 
     /**
@@ -222,22 +241,12 @@ signals:
      *
      * @param selectedFilesList list of selected files
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void checkSelected(QStringList selectedFilesList);
 
     /** Suppress Ids */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void suppressIds(QStringList ids);
-
-    /** Edit contract for function */
-    void editFunctionContract(QString function);
-
-    /** Delete contract for function */
-    void deleteFunctionContract(QString function);
-
-    /** Edit contract for variable */
-    void editVariableContract(QString var);
-
-    /** Delete variable contract */
-    void deleteVariableContract(QString var);
 
     /**
      * @brief Show/hide certain type of errors
@@ -246,6 +255,7 @@ signals:
      * @param type Type of error to show/hide
      * @param show Should specified errors be shown (true) or hidden (false)
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void showResults(ShowTypes::ShowType type, bool show);
 
     /**
@@ -254,6 +264,7 @@ signals:
      *
      * @param show Should specified errors be shown (true) or hidden (false)
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void showCppcheckResults(bool show);
 
     /**
@@ -262,6 +273,7 @@ signals:
      *
      * @param show Should specified errors be shown (true) or hidden (false)
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void showClangResults(bool show);
 
     /**
@@ -335,11 +347,6 @@ public slots:
     void debugError(const ErrorItem &item);
 
     /**
-     * \brief bughunting report line
-     */
-    void bughuntingReportLine(const QString& line);
-
-    /**
      * \brief Clear log messages
      */
     void logClear();
@@ -354,37 +361,39 @@ public slots:
      */
     void logCopyComplete();
 
-    /** \brief Contract was double clicked => edit it */
-    void contractDoubleClicked(QListWidgetItem* item);
+private:
 
-    /** \brief Variable was double clicked => edit it */
-    void variableDoubleClicked(QListWidgetItem* item);
+    /**
+     * If provided ErrorItem is a critical error then display warning message
+     * in the resultsview
+     */
+    void handleCriticalError(const ErrorItem& item);
 
-    void editVariablesFilter(const QString &text);
-
-protected:
     /**
      * @brief Should we show a "No errors found dialog" every time no errors were found?
      */
-    bool mShowNoErrorsMessage;
+    bool mShowNoErrorsMessage = true;
 
-    Ui::ResultsView mUI;
+    Ui::ResultsView *mUI;
 
     CheckStatistics *mStatistics;
 
-    bool eventFilter(QObject *target, QEvent *event);
+    Settings* mCheckSettings = nullptr;
+
+    /**
+     * Set to true when checking finish successfully. Set to false whenever analysis starts.
+     */
+    bool mSuccess = false;
+
+    /** Critical error ids */
+    QString mCriticalErrors;
+
 private slots:
     /**
      * @brief Custom context menu for Analysis Log
      * @param pos Mouse click position
      */
     void on_mListLog_customContextMenuRequested(const QPoint &pos);
-private:
-    QSet<QString> mFunctionContracts;
-    QSet<QString> mVariableContracts;
-
-    /** Current file shown in the code editor */
-    QString mCurrentFileName;
 };
 /// @}
 #endif // RESULTSVIEW_H

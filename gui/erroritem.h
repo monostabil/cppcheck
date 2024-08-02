@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,10 +19,12 @@
 #ifndef ERRORITEM_H
 #define ERRORITEM_H
 
-#include <QString>
-#include <QMetaType>
-#include <QList>
 #include "errorlogger.h"
+#include "errortypes.h"
+
+#include <QList>
+#include <QMetaType>
+#include <QString>
 
 /// @addtogroup GUI
 /// @{
@@ -35,12 +37,12 @@
  */
 class GuiSeverity {
 public:
-    static QString toString(Severity::SeverityType severity) {
-        return QString::fromStdString(Severity::toString(severity));
+    static QString toString(Severity severity) {
+        return QString::fromStdString(severityToString(severity));
     }
 
-    static Severity::SeverityType fromString(const QString &severity) {
-        return Severity::fromString(severity.toStdString());
+    static Severity fromString(const QString &severity) {
+        return severityFromString(severity.toStdString());
     }
 };
 
@@ -80,10 +82,8 @@ public:
     QString tool() const;
 
     QString file0;
-    QString function;
     QString errorId;
-    Severity::SeverityType severity;
-    bool incomplete;
+    Severity severity;
     bool inconclusive;
     QString summary;
     QString message;
@@ -91,6 +91,9 @@ public:
     unsigned long long hash;
     QList<QErrorPathItem> errorPath;
     QString symbolNames;
+    QString remark;
+    QString classification; // misra/cert/etc: classification/level
+    QString guideline; // misra/cert/etc: guideline/rule
 
     // Special GUI properties
     QString sinceDate;
@@ -102,6 +105,7 @@ public:
     static bool sameCID(const ErrorItem &errorItem1, const ErrorItem &errorItem2);
 };
 
+// NOLINTNEXTLINE(performance-no-int-to-ptr)
 Q_DECLARE_METATYPE(ErrorItem)
 
 /**
@@ -113,15 +117,15 @@ public:
     int line;
     QString file0;
     QString errorId;
-    bool incomplete;
     int cwe;
     unsigned long long hash;
     bool inconclusive;
-    Severity::SeverityType severity;
+    Severity severity;
     QString summary;
     QString message;
     QString sinceDate;
     QString tags;
+    QString remark;
 };
 
 /// @}

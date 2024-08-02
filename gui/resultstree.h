@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,10 +20,16 @@
 #ifndef RESULTSTREE_H
 #define RESULTSTREE_H
 
-#include <QTreeView>
-#include <QStandardItemModel>
-#include "errortypes.h"
+#include "common.h"
 #include "showtypes.h"
+
+#include <cstdint>
+
+#include <QObject>
+#include <QStandardItemModel>
+#include <QString>
+#include <QStringList>
+#include <QTreeView>
 
 class ApplicationList;
 class Report;
@@ -34,7 +40,9 @@ class QWidget;
 class QItemSelectionModel;
 class ThreadHandler;
 class QContextMenuEvent;
+class QKeyEvent;
 class QSettings;
+enum class Severity : std::uint8_t;
 
 /// @addtogroup GUI
 /// @{
@@ -48,7 +56,7 @@ class ResultsTree : public QTreeView {
     Q_OBJECT
 public:
     explicit ResultsTree(QWidget * parent = nullptr);
-    virtual ~ResultsTree();
+
     void initialize(QSettings *settings, ApplicationList *list, ThreadHandler *checkThreadHandler);
 
     /**
@@ -129,7 +137,7 @@ public:
      * @return Directory containing source files
      */
 
-    QString getCheckDirectory();
+    const QString& getCheckDirectory();
 
     /**
      * @brief Check if there are any visible results in view.
@@ -177,7 +185,9 @@ public:
      */
     ShowTypes mShowSeverities;
 
-    virtual void keyPressEvent(QKeyEvent *event);
+    void keyPressEvent(QKeyEvent *event) override;
+
+    void setReportType(ReportType reportType);
 
 signals:
     /**
@@ -185,6 +195,7 @@ signals:
      *
      * @param hidden true if there are some hidden results, or false if there are not
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void resultsHidden(bool hidden);
 
     /**
@@ -192,6 +203,7 @@ signals:
      *
      * @param selectedItems list of selected files
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void checkSelected(QStringList selectedItems);
 
     /**
@@ -199,13 +211,13 @@ signals:
      *
      * @param current Model index to specify new selected item.
      */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void treeSelectionChanged(const QModelIndex &current);
 
     /** Suppress Ids */
+    // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name) - caused by generated MOC code
     void suppressIds(QStringList ids);
 
-    /** Edit contract for function */
-    void editFunctionContract(QString function);
 public slots:
 
     /**
@@ -284,17 +296,12 @@ protected slots:
     void openContainingFolder();
 
     /**
-     * @brief Allow user to edit contract to fix bughunting warning
-     */
-    void editContract();
-
-    /**
      * @brief Slot for selection change in the results tree.
      *
      * @param current Model index to specify new selected item.
      * @param previous Model index to specify previous selected item.
      */
-    virtual void currentChanged(const QModelIndex &current, const QModelIndex &previous);
+    void currentChanged(const QModelIndex &current, const QModelIndex &previous) override;
 
 protected:
 
@@ -333,7 +340,7 @@ protected:
      *
      * @param severity Severity
      */
-    QString severityToIcon(Severity::SeverityType severity) const;
+    static QString severityToIcon(Severity severity);
 
     /**
      * @brief Helper function to open an error within target with application*
@@ -342,15 +349,7 @@ protected:
      * @param application Index of the application to open with. Giving -1
      *  (default value) will open the default application.
      */
-    void startApplication(QStandardItem *target, int application = -1);
-
-    /**
-     * @brief Helper function to copy filename/full path to the clipboard
-     *
-     * @param target Error tree item to open
-     * @param fullPath Are we copying full path or only filename?
-     */
-    void copyPathToClipboard(QStandardItem *target, bool fullPath);
+    void startApplication(const QStandardItem *target, int application = -1);
 
     /**
      * @brief Helper function returning the filename/full path of the error tree item \a target.
@@ -358,14 +357,14 @@ protected:
      * @param target The error tree item containing the filename/full path
      * @param fullPath Whether or not to retrieve the full path or only the filename.
      */
-    QString getFilePath(QStandardItem *target, bool fullPath);
+    static QString getFilePath(const QStandardItem *target, bool fullPath);
 
     /**
      * @brief Context menu event (user right clicked on the tree)
      *
      * @param e Event
      */
-    void contextMenuEvent(QContextMenuEvent * e);
+    void contextMenuEvent(QContextMenuEvent * e) override;
 
     /**
      * @brief Add a new error item beneath a file or a backtrace item beneath an error
@@ -388,7 +387,7 @@ protected:
      * @param severity Severity to convert
      * @return Severity as translated string
      */
-    static QString severityToTranslatedString(Severity::SeverityType severity);
+    static QString severityToTranslatedString(Severity severity);
 
     /**
      * @brief Load all settings
@@ -459,7 +458,7 @@ protected:
      * @brief Program settings
      *
      */
-    QSettings *mSettings;
+    QSettings* mSettings{};
 
     /**
      * @brief A string used to filter the results for display.
@@ -471,37 +470,37 @@ protected:
      * @brief List of applications to open errors with
      *
      */
-    ApplicationList *mApplications;
+    ApplicationList* mApplications{};
 
     /**
      * @brief Right clicked item (used by context menu slots)
      *
      */
-    QStandardItem *mContextItem;
+    QStandardItem* mContextItem{};
 
     /**
      * @brief Should full path of files be shown (true) or relative (false)
      *
      */
-    bool mShowFullPath;
+    bool mShowFullPath{};
 
     /**
      * @brief Should full path of files be saved
      *
      */
-    bool mSaveFullPath;
+    bool mSaveFullPath{};
 
     /**
      * @brief Save all errors (true) or only visible (false)
      *
      */
-    bool mSaveAllErrors;
+    bool mSaveAllErrors = true;
 
     /**
      * @brief true if optional column "Id" is shown
      *
      */
-    bool mShowErrorId;
+    bool mShowErrorId{};
 
     /**
      * @brief Path we are currently checking
@@ -513,7 +512,7 @@ protected:
      * @brief Are there any visible errors
      *
      */
-    bool mVisibleErrors;
+    bool mVisibleErrors{};
 
 private:
     /** tag selected items */
@@ -522,13 +521,28 @@ private:
     /** @brief Convert GUI error item into data error item */
     void readErrorItem(const QStandardItem *error, ErrorItem *item) const;
 
+    bool isCertReport() const {
+        return mReportType == ReportType::certC || mReportType == ReportType::certCpp;
+    }
+
+    bool isAutosarMisraReport() const {
+        return mReportType == ReportType::autosar ||
+               mReportType == ReportType::misraC ||
+               mReportType == ReportType::misraCpp2008 ||
+               mReportType == ReportType::misraCpp2023;
+    }
+
     QStringList mHiddenMessageId;
 
-    QItemSelectionModel *mSelectionModel;
-    ThreadHandler *mThread;
+    QItemSelectionModel* mSelectionModel{};
+    ThreadHandler *mThread{};
 
-    bool mShowCppcheck;
-    bool mShowClang;
+    bool mShowCppcheck = true;
+    bool mShowClang = true;
+
+    ReportType mReportType = ReportType::normal;
+
+    QMap<QString,QString> mGuideline;
 };
 /// @}
 #endif // RESULTSTREE_H

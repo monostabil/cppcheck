@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,26 +23,14 @@
 
 #include "config.h"
 #include "errortypes.h"
-#include "suppressions.h"
 #include "color.h"
 
-#include <fstream>
+#include <cstddef>
 #include <list>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
-
-/**
- * CWE id (Common Weakness Enumeration)
- * See https://cwe.mitre.org/ for further reference.
- * */
-// CWE list: https://cwe.mitre.org/data/published/cwe_v3.4.1.pdf
-static const struct CWE CWE_USE_OF_UNINITIALIZED_VARIABLE(457U);
-static const struct CWE CWE_NULL_POINTER_DEREFERENCE(476U);
-static const struct CWE CWE_USE_OF_POTENTIALLY_DANGEROUS_FUNCTION(676U);
-static const struct CWE CWE_INCORRECT_CALCULATION(682U);
-static const struct CWE CWE_EXPIRED_POINTER_DEREFERENCE(825U);
-
 
 class Token;
 class TokenList;
@@ -64,19 +52,16 @@ public:
      * Internally paths are stored with / separator. When getting the filename
      * it is by default converted to native separators.
      */
-    class CPPCHECKLIB FileLocation {
+    class CPPCHECKLIB WARN_UNUSED FileLocation {
     public:
-        FileLocation()
-            : fileIndex(0), line(0), column(0) {}
-
         FileLocation(const std::string &file, int line, unsigned int column)
             : fileIndex(0), line(line), column(column), mOrigFileName(file), mFileName(file) {}
 
-        FileLocation(const std::string &file, const std::string &info, int line, unsigned int column)
-            : fileIndex(0), line(line), column(column), mOrigFileName(file), mFileName(file), mInfo(info) {}
+        FileLocation(const std::string &file, std::string info, int line, unsigned int column)
+            : fileIndex(0), line(line), column(column), mOrigFileName(file), mFileName(file), mInfo(std::move(info)) {}
 
         FileLocation(const Token* tok, const TokenList* tokenList);
-        FileLocation(const Token* tok, const std::string &info, const TokenList* tokenList);
+        FileLocation(const Token* tok, std::string info, const TokenList* tokenList);
 
         /**
          * Return the filename.
@@ -96,7 +81,7 @@ public:
          * Set the filename.
          * @param file Filename to set.
          */
-        void setfile(const std::string &file);
+        void setfile(std::string file);
 
         /**
          * @return the location as a string. Format: [file:line]
@@ -107,11 +92,8 @@ public:
         int line; // negative value means "no line"
         unsigned int column;
 
-        std::string getinfo() const {
+        const std::string& getinfo() const {
             return mInfo;
-        }
-        void setinfo(const std::string &i) {
-            mInfo = i;
         }
 
     private:
@@ -120,40 +102,38 @@ public:
         std::string mInfo;
     };
 
-    ErrorMessage(const std::list<FileLocation> &callStack,
-                 const std::string& file1,
-                 Severity::SeverityType severity,
+    ErrorMessage(std::list<FileLocation> callStack,
+                 std::string file1,
+                 Severity severity,
                  const std::string &msg,
-                 const std::string &id, Certainty::CertaintyLevel certainty);
-    ErrorMessage(const std::list<FileLocation> &callStack,
-                 const std::string& file1,
-                 Severity::SeverityType severity,
+                 std::string id, Certainty certainty);
+    ErrorMessage(std::list<FileLocation> callStack,
+                 std::string file1,
+                 Severity severity,
                  const std::string &msg,
-                 const std::string &id,
+                 std::string id,
                  const CWE &cwe,
-                 Certainty::CertaintyLevel certainty);
+                 Certainty certainty);
     ErrorMessage(const std::list<const Token*>& callstack,
                  const TokenList* list,
-                 Severity::SeverityType severity,
-                 const std::string& id,
+                 Severity severity,
+                 std::string id,
                  const std::string& msg,
-                 Certainty::CertaintyLevel certainty);
+                 Certainty certainty);
     ErrorMessage(const std::list<const Token*>& callstack,
                  const TokenList* list,
-                 Severity::SeverityType severity,
-                 const std::string& id,
+                 Severity severity,
+                 std::string id,
                  const std::string& msg,
                  const CWE &cwe,
-                 Certainty::CertaintyLevel certainty,
-                 bool bugHunting);
+                 Certainty certainty);
     ErrorMessage(const ErrorPath &errorPath,
                  const TokenList *tokenList,
-                 Severity::SeverityType severity,
+                 Severity severity,
                  const char id[],
                  const std::string &msg,
                  const CWE &cwe,
-                 Certainty::CertaintyLevel certainty,
-                 bool bugHunting);
+                 Certainty certainty);
     ErrorMessage();
     explicit ErrorMessage(const tinyxml2::XMLElement * const errmsg);
 
@@ -162,7 +142,7 @@ public:
      */
     std::string toXML() const;
 
-    static std::string getXMLHeader();
+    static std::string getXMLHeader(std::string productName);
     static std::string getXMLFooter();
 
     /**
@@ -179,21 +159,20 @@ public:
                          const std::string &templateLocation = emptyString) const;
 
     std::string serialize() const;
-    bool deserialize(const std::string &data);
+    void deserialize(const std::string &data);
 
     std::list<FileLocation> callStack;
     std::string id;
 
     /** For GUI rechecking; source file (not header) */
     std::string file0;
-    /** For GUI bug hunting; function name */
-    std::string function;
-    /** For GUI bug hunting; incomplete analysis */
-    bool incomplete;
 
-    Severity::SeverityType severity;
+    Severity severity;
     CWE cwe;
-    Certainty::CertaintyLevel certainty;
+    Certainty certainty;
+
+    /** remark from REMARK comment */
+    std::string remark;
 
     /** Warning hash */
     std::size_t hash;
@@ -207,6 +186,7 @@ public:
     }
 
     /** Verbose message (may be the same as the short message) */
+    // cppcheck-suppress unusedFunction - used by GUI only
     const std::string &verboseMessage() const {
         return mVerboseMessage;
     }
@@ -216,7 +196,7 @@ public:
         return mSymbolNames;
     }
 
-    Suppressions::ErrorMessage toSuppressionsErrorMessage() const;
+    static ErrorMessage fromInternalError(const InternalError &internalError, const TokenList *tokenList, const std::string &filename, const std::string& msg = emptyString);
 
 private:
     static std::string fixInvalidChars(const std::string& raw);
@@ -236,16 +216,9 @@ private:
  * should implement.
  */
 class CPPCHECKLIB ErrorLogger {
-protected:
-    std::ofstream plistFile;
 public:
-    ErrorLogger() {}
-    virtual ~ErrorLogger() {
-        if (plistFile.is_open()) {
-            plistFile << ErrorLogger::plistFooter();
-            plistFile.close();
-        }
-    }
+    ErrorLogger() = default;
+    virtual ~ErrorLogger() = default;
 
     /**
      * Information about progress is directed here.
@@ -275,23 +248,6 @@ public:
         (void)value;
     }
 
-    /**
-     * Output information messages.
-     * @param msg Location and other information about the found error.
-     */
-    virtual void reportInfo(const ErrorMessage &msg) {
-        reportErr(msg);
-    }
-
-    virtual void bughuntingReport(const std::string &str) = 0;
-
-    /**
-     * Report unmatched suppressions
-     * @param unmatched list of unmatched suppressions (from Settings::Suppressions::getUnmatched(Local|Global)Suppressions)
-     * @return true is returned if errors are reported
-     */
-    bool reportUnmatchedSuppressions(const std::list<Suppressions::Suppression> &unmatched);
-
     static std::string callStackToString(const std::list<ErrorMessage::FileLocation> &callStack);
 
     /**
@@ -308,10 +264,23 @@ public:
                "</dict>\r\n"
                "</plist>";
     }
+
+    static bool isCriticalErrorId(const std::string& id) {
+        return mCriticalErrorIds.count(id) != 0;
+    }
+
+private:
+    static const std::set<std::string> mCriticalErrorIds;
 };
 
 /** Replace substring. Example replaceStr("1,NR,3", "NR", "2") => "1,2,3" */
 std::string replaceStr(std::string s, const std::string &from, const std::string &to);
+
+/** replaces the static parts of the location template **/
+CPPCHECKLIB void substituteTemplateFormatStatic(std::string& templateFormat);
+
+/** replaces the static parts of the location template **/
+CPPCHECKLIB void substituteTemplateLocationStatic(std::string& templateLocation);
 
 /// @}
 //---------------------------------------------------------------------------

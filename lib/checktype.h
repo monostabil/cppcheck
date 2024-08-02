@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,12 +24,16 @@
 
 #include "check.h"
 #include "config.h"
-#include "valueflow.h"
+#include "tokenize.h"
+#include "vfvalue.h"
+
+#include <list>
+#include <string>
 
 class ErrorLogger;
 class Settings;
 class Token;
-class Tokenizer;
+class ValueType;
 
 /// @addtogroup Checks
 /// @{
@@ -42,14 +46,15 @@ public:
     /** @brief This constructor is used when registering the CheckClass */
     CheckType() : Check(myName()) {}
 
+private:
     /** @brief This constructor is used when running checks. */
     CheckType(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
         : Check(myName(), tokenizer, settings, errorLogger) {}
 
     /** @brief Run checks against the normal token list */
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
+    void runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger) override {
         // These are not "simplified" because casts can't be ignored
-        CheckType checkType(tokenizer, settings, errorLogger);
+        CheckType checkType(&tokenizer, &tokenizer.getSettings(), errorLogger);
         checkType.checkTooBigBitwiseShift();
         checkType.checkIntegerOverflow();
         checkType.checkSignConversion();
@@ -71,20 +76,18 @@ public:
 
     /** @brief %Check for float to integer overflow */
     void checkFloatToIntegerOverflow();
-    void checkFloatToIntegerOverflow(const Token *tok, const ValueType *vtint, const ValueType *vtfloat, const std::list<ValueFlow::Value> *floatValues);
-
-private:
+    void checkFloatToIntegerOverflow(const Token *tok, const ValueType *vtint, const ValueType *vtfloat, const std::list<ValueFlow::Value> &floatValues);
 
     // Error messages..
     void tooBigBitwiseShiftError(const Token *tok, int lhsbits, const ValueFlow::Value &rhsbits);
     void tooBigSignedBitwiseShiftError(const Token *tok, int lhsbits, const ValueFlow::Value &rhsbits);
     void integerOverflowError(const Token *tok, const ValueFlow::Value &value);
     void signConversionError(const Token *tok, const ValueFlow::Value *negativeValue, const bool constvalue);
-    void longCastAssignError(const Token *tok);
-    void longCastReturnError(const Token *tok);
+    void longCastAssignError(const Token *tok, const ValueType* src = nullptr, const ValueType* tgt = nullptr);
+    void longCastReturnError(const Token *tok, const ValueType* src = nullptr, const ValueType* tgt = nullptr);
     void floatToIntegerOverflowError(const Token *tok, const ValueFlow::Value &value);
 
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
         CheckType c(nullptr, settings, errorLogger);
         c.tooBigBitwiseShiftError(nullptr, 32, ValueFlow::Value(64));
         c.tooBigSignedBitwiseShiftError(nullptr, 31, ValueFlow::Value(31));
@@ -102,7 +105,7 @@ private:
         return "Type";
     }
 
-    std::string classInfo() const OVERRIDE {
+    std::string classInfo() const override {
         return "Type checks\n"
                "- bitwise shift by too many bits (only enabled when --platform is used)\n"
                "- signed integer overflow (only enabled when --platform is used)\n"

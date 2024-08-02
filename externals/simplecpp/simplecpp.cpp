@@ -1,44 +1,59 @@
 /*
  * simplecpp - A simple and high-fidelity C/C++ preprocessor library
- * Copyright (C) 2016 Daniel Marjamäki.
- *
- * This library is free software: you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation, either
- * version 3 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
+ * Copyright (C) 2016-2023 simplecpp team
  */
 
 #if defined(_WIN32) || defined(__CYGWIN__) || defined(__MINGW32__)
 #define SIMPLECPP_WINDOWS
 #define NOMINMAX
 #endif
+
 #include "simplecpp.h"
 
 #include <algorithm>
+#include <cassert>
+#include <cctype>
 #include <climits>
+#include <cstddef> // IWYU pragma: keep
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <exception>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <list>
+#include <map>
+#include <set>
 #include <sstream>
 #include <stack>
 #include <stdexcept>
+#include <string>
+#if __cplusplus >= 201103L
+#ifdef SIMPLECPP_WINDOWS
+#include <mutex>
+#endif
+#include <unordered_map>
+#endif
 #include <utility>
+#include <vector>
 
 #ifdef SIMPLECPP_WINDOWS
 #include <windows.h>
 #undef ERROR
-#undef TRUE
+#endif
+
+#if __cplusplus >= 201103L
+#define OVERRIDE override
+#define EXPLICIT explicit
+#else
+#define OVERRIDE
+#define EXPLICIT
+#endif
+
+#if (__cplusplus < 201103L) && !defined(__APPLE__)
+#define nullptr NULL
 #endif
 
 static bool isHex(const std::string &s)
@@ -51,6 +66,19 @@ static bool isOct(const std::string &s)
     return s.size()>1 && (s[0]=='0') && (s[1] >= '0') && (s[1] < '8');
 }
 
+// TODO: added an undercore since this conflicts with a function of the same name in utils.h from Cppcheck source when building Cppcheck with MSBuild
+static bool isStringLiteral_(const std::string &s)
+{
+    return s.size() > 1 && (s[0]=='\"') && (*s.rbegin()=='\"');
+}
+
+// TODO: added an undercore since this conflicts with a function of the same name in utils.h from Cppcheck source when building Cppcheck with MSBuild
+static bool isCharLiteral_(const std::string &s)
+{
+    // char literal patterns can include 'a', '\t', '\000', '\xff', 'abcd', and maybe ''
+    // This only checks for the surrounding '' but doesn't parse the content.
+    return s.size() > 1 && (s[0]=='\'') && (*s.rbegin()=='\'');
+}
 
 static const simplecpp::TokenString DEFINE("define");
 static const simplecpp::TokenString UNDEF("undef");
@@ -73,8 +101,11 @@ static const simplecpp::TokenString ONCE("once");
 
 static const simplecpp::TokenString HAS_INCLUDE("__has_include");
 
+static const simplecpp::TokenString INNER_COMMA(",,");
+
 template<class T> static std::string toString(T t)
 {
+    // NOLINTNEXTLINE(misc-const-correctness) - false positive
     std::ostringstream ostr;
     ostr << t;
     return ostr.str();
@@ -108,14 +139,9 @@ static unsigned long long stringToULL(const std::string &s)
     return ret;
 }
 
-static bool startsWith(const std::string &str, const std::string &s)
-{
-    return (str.size() >= s.size() && str.compare(0, s.size(), s) == 0);
-}
-
 static bool endsWith(const std::string &s, const std::string &e)
 {
-    return (s.size() >= e.size() && s.compare(s.size() - e.size(), e.size(), e) == 0);
+    return (s.size() >= e.size()) && std::equal(e.rbegin(), e.rend(), s.rbegin());
 }
 
 static bool sameline(const simplecpp::Token *tok1, const simplecpp::Token *tok2)
@@ -151,7 +177,7 @@ const std::string simplecpp::Location::emptyFileName;
 
 void simplecpp::Location::adjust(const std::string &str)
 {
-    if (str.find_first_of("\r\n") == std::string::npos) {
+    if (strpbrk(str.c_str(), "\r\n") == nullptr) {
         col += str.size();
         return;
     }
@@ -169,17 +195,17 @@ void simplecpp::Location::adjust(const std::string &str)
 
 bool simplecpp::Token::isOneOf(const char ops[]) const
 {
-    return (op != '\0') && (std::strchr(ops, op) != NULL);
+    return (op != '\0') && (std::strchr(ops, op) != nullptr);
 }
 
 bool simplecpp::Token::startsWithOneOf(const char c[]) const
 {
-    return std::strchr(c, string[0]) != NULL;
+    return std::strchr(c, string[0]) != nullptr;
 }
 
 bool simplecpp::Token::endsWithOneOf(const char c[]) const
 {
-    return std::strchr(c, string[string.size() - 1U]) != NULL;
+    return std::strchr(c, string[string.size() - 1U]) != nullptr;
 }
 
 void simplecpp::Token::printAll() const
@@ -207,21 +233,236 @@ void simplecpp::Token::printOut() const
     std::cout << std::endl;
 }
 
-simplecpp::TokenList::TokenList(std::vector<std::string> &filenames) : frontToken(NULL), backToken(NULL), files(filenames) {}
+// cppcheck-suppress noConstructor - we call init() in the inherited to initialize the private members
+class simplecpp::TokenList::Stream {
+public:
+    virtual ~Stream() {}
+
+    virtual int get() = 0;
+    virtual int peek() = 0;
+    virtual void unget() = 0;
+    virtual bool good() = 0;
+
+    unsigned char readChar()
+    {
+        unsigned char ch = static_cast<unsigned char>(get());
+
+        // For UTF-16 encoded files the BOM is 0xfeff/0xfffe. If the
+        // character is non-ASCII character then replace it with 0xff
+        if (isUtf16) {
+            const unsigned char ch2 = static_cast<unsigned char>(get());
+            const int ch16 = makeUtf16Char(ch, ch2);
+            ch = static_cast<unsigned char>(((ch16 >= 0x80) ? 0xff : ch16));
+        }
+
+        // Handling of newlines..
+        if (ch == '\r') {
+            ch = '\n';
+
+            int ch2 = get();
+            if (isUtf16) {
+                const int c2 = get();
+                ch2 = makeUtf16Char(ch2, c2);
+            }
+
+            if (ch2 != '\n')
+                ungetChar();
+        }
+
+        return ch;
+    }
+
+    unsigned char peekChar()
+    {
+        unsigned char ch = static_cast<unsigned char>(peek());
+
+        // For UTF-16 encoded files the BOM is 0xfeff/0xfffe. If the
+        // character is non-ASCII character then replace it with 0xff
+        if (isUtf16) {
+            (void)get();
+            const unsigned char ch2 = static_cast<unsigned char>(peek());
+            unget();
+            const int ch16 = makeUtf16Char(ch, ch2);
+            ch = static_cast<unsigned char>(((ch16 >= 0x80) ? 0xff : ch16));
+        }
+
+        // Handling of newlines..
+        if (ch == '\r')
+            ch = '\n';
+
+        return ch;
+    }
+
+    void ungetChar()
+    {
+        unget();
+        if (isUtf16)
+            unget();
+    }
+
+protected:
+    void init() {
+        // initialize since we use peek() in getAndSkipBOM()
+        isUtf16 = false;
+        bom = getAndSkipBOM();
+        isUtf16 = (bom == 0xfeff || bom == 0xfffe);
+    }
+
+private:
+    inline int makeUtf16Char(const unsigned char ch, const unsigned char ch2) const
+    {
+        return (bom == 0xfeff) ? (ch<<8 | ch2) : (ch2<<8 | ch);
+    }
+
+    unsigned short getAndSkipBOM()
+    {
+        const int ch1 = peek();
+
+        // The UTF-16 BOM is 0xfffe or 0xfeff.
+        if (ch1 >= 0xfe) {
+            (void)get();
+            const unsigned short byte = (static_cast<unsigned char>(ch1) << 8);
+            if (peek() >= 0xfe)
+                return byte | static_cast<unsigned char>(get());
+            unget();
+            return 0;
+        }
+
+        // Skip UTF-8 BOM 0xefbbbf
+        if (ch1 == 0xef) {
+            (void)get();
+            if (peek() == 0xbb) {
+                (void)get();
+                if (peek() == 0xbf) {
+                    (void)get();
+                    return 0;
+                }
+                unget();
+            }
+            unget();
+        }
+
+        return 0;
+    }
+
+    unsigned short bom;
+protected:
+    bool isUtf16;
+};
+
+class StdIStream : public simplecpp::TokenList::Stream {
+public:
+    // cppcheck-suppress uninitDerivedMemberVar - we call Stream::init() to initialize the private members
+    EXPLICIT StdIStream(std::istream &istr)
+        : istr(istr)
+    {
+        assert(istr.good());
+        init();
+    }
+
+    virtual int get() OVERRIDE {
+        return istr.get();
+    }
+    virtual int peek() OVERRIDE {
+        return istr.peek();
+    }
+    virtual void unget() OVERRIDE {
+        istr.unget();
+    }
+    virtual bool good() OVERRIDE {
+        return istr.good();
+    }
+
+private:
+    std::istream &istr;
+};
+
+class FileStream : public simplecpp::TokenList::Stream {
+public:
+    // cppcheck-suppress uninitDerivedMemberVar - we call Stream::init() to initialize the private members
+    EXPLICIT FileStream(const std::string &filename, std::vector<std::string> &files)
+        : file(fopen(filename.c_str(), "rb"))
+        , lastCh(0)
+        , lastStatus(0)
+    {
+        if (!file) {
+            files.push_back(filename);
+            throw simplecpp::Output(files, simplecpp::Output::FILE_NOT_FOUND, "File is missing: " + filename);
+        }
+        init();
+    }
+
+    ~FileStream() OVERRIDE {
+        fclose(file);
+        file = nullptr;
+    }
+
+    virtual int get() OVERRIDE {
+        lastStatus = lastCh = fgetc(file);
+        return lastCh;
+    }
+    virtual int peek() OVERRIDE{
+        // keep lastCh intact
+        const int ch = fgetc(file);
+        unget_internal(ch);
+        return ch;
+    }
+    virtual void unget() OVERRIDE {
+        unget_internal(lastCh);
+    }
+    virtual bool good() OVERRIDE {
+        return lastStatus != EOF;
+    }
+
+private:
+    void unget_internal(int ch) {
+        if (isUtf16) {
+            // TODO: use ungetc() as well
+            // UTF-16 has subsequent unget() calls
+            fseek(file, -1, SEEK_CUR);
+        }
+        else
+            ungetc(ch, file);
+    }
+
+    FileStream(const FileStream&);
+    FileStream &operator=(const FileStream&);
+
+    FILE *file;
+    int lastCh;
+    int lastStatus;
+};
+
+simplecpp::TokenList::TokenList(std::vector<std::string> &filenames) : frontToken(nullptr), backToken(nullptr), files(filenames) {}
 
 simplecpp::TokenList::TokenList(std::istream &istr, std::vector<std::string> &filenames, const std::string &filename, OutputList *outputList)
-    : frontToken(NULL), backToken(NULL), files(filenames)
+    : frontToken(nullptr), backToken(nullptr), files(filenames)
 {
-    readfile(istr,filename,outputList);
+    StdIStream stream(istr);
+    readfile(stream,filename,outputList);
 }
 
-simplecpp::TokenList::TokenList(const TokenList &other) : frontToken(NULL), backToken(NULL), files(other.files)
+simplecpp::TokenList::TokenList(const std::string &filename, std::vector<std::string> &filenames, OutputList *outputList)
+        : frontToken(nullptr), backToken(nullptr), files(filenames)
+{
+    try
+    {
+        FileStream stream(filename, filenames);
+        readfile(stream,filename,outputList);
+    }
+    catch(const simplecpp::Output & e) // TODO handle extra type of errors
+    {
+        outputList->push_back(e);
+    }
+}
+
+simplecpp::TokenList::TokenList(const TokenList &other) : frontToken(nullptr), backToken(nullptr), files(other.files)
 {
     *this = other;
 }
 
 #if __cplusplus >= 201103L
-simplecpp::TokenList::TokenList(TokenList &&other) : frontToken(NULL), backToken(NULL), files(other.files)
+simplecpp::TokenList::TokenList(TokenList &&other) : frontToken(nullptr), backToken(nullptr), files(other.files)
 {
     *this = std::move(other);
 }
@@ -236,6 +477,7 @@ simplecpp::TokenList &simplecpp::TokenList::operator=(const TokenList &other)
 {
     if (this != &other) {
         clear();
+        files = other.files;
         for (const Token *tok = other.cfront(); tok; tok = tok->next)
             push_back(new Token(*tok));
         sizeOfType = other.sizeOfType;
@@ -248,10 +490,11 @@ simplecpp::TokenList &simplecpp::TokenList::operator=(TokenList &&other)
 {
     if (this != &other) {
         clear();
-        backToken = other.backToken;
-        other.backToken = NULL;
         frontToken = other.frontToken;
-        other.frontToken = NULL;
+        other.frontToken = nullptr;
+        backToken = other.backToken;
+        other.backToken = nullptr;
+        files = other.files;
         sizeOfType = std::move(other.sizeOfType);
     }
     return *this;
@@ -260,9 +503,9 @@ simplecpp::TokenList &simplecpp::TokenList::operator=(TokenList &&other)
 
 void simplecpp::TokenList::clear()
 {
-    backToken = NULL;
+    backToken = nullptr;
     while (frontToken) {
-        Token *next = frontToken->next;
+        Token * const next = frontToken->next;
         delete frontToken;
         frontToken = next;
     }
@@ -310,92 +553,6 @@ std::string simplecpp::TokenList::stringify() const
     return ret.str();
 }
 
-static unsigned char readChar(std::istream &istr, unsigned int bom)
-{
-    unsigned char ch = (unsigned char)istr.get();
-
-    // For UTF-16 encoded files the BOM is 0xfeff/0xfffe. If the
-    // character is non-ASCII character then replace it with 0xff
-    if (bom == 0xfeff || bom == 0xfffe) {
-        const unsigned char ch2 = (unsigned char)istr.get();
-        const int ch16 = (bom == 0xfeff) ? (ch<<8 | ch2) : (ch2<<8 | ch);
-        ch = (unsigned char)((ch16 >= 0x80) ? 0xff : ch16);
-    }
-
-    // Handling of newlines..
-    if (ch == '\r') {
-        ch = '\n';
-        if (bom == 0 && (char)istr.peek() == '\n')
-            (void)istr.get();
-        else if (bom == 0xfeff || bom == 0xfffe) {
-            int c1 = istr.get();
-            int c2 = istr.get();
-            int ch16 = (bom == 0xfeff) ? (c1<<8 | c2) : (c2<<8 | c1);
-            if (ch16 != '\n') {
-                istr.unget();
-                istr.unget();
-            }
-        }
-    }
-
-    return ch;
-}
-
-static unsigned char peekChar(std::istream &istr, unsigned int bom)
-{
-    unsigned char ch = (unsigned char)istr.peek();
-
-    // For UTF-16 encoded files the BOM is 0xfeff/0xfffe. If the
-    // character is non-ASCII character then replace it with 0xff
-    if (bom == 0xfeff || bom == 0xfffe) {
-        (void)istr.get();
-        const unsigned char ch2 = (unsigned char)istr.peek();
-        istr.unget();
-        const int ch16 = (bom == 0xfeff) ? (ch<<8 | ch2) : (ch2<<8 | ch);
-        ch = (unsigned char)((ch16 >= 0x80) ? 0xff : ch16);
-    }
-
-    // Handling of newlines..
-    if (ch == '\r')
-        ch = '\n';
-
-    return ch;
-}
-
-static void ungetChar(std::istream &istr, unsigned int bom)
-{
-    istr.unget();
-    if (bom == 0xfeff || bom == 0xfffe)
-        istr.unget();
-}
-
-static unsigned short getAndSkipBOM(std::istream &istr)
-{
-    const int ch1 = istr.peek();
-
-    // The UTF-16 BOM is 0xfffe or 0xfeff.
-    if (ch1 >= 0xfe) {
-        unsigned short bom = ((unsigned char)istr.get() << 8);
-        if (istr.peek() >= 0xfe)
-            return bom | (unsigned char)istr.get();
-        istr.unget();
-        return 0;
-    }
-
-    // Skip UTF-8 BOM 0xefbbbf
-    if (ch1 == 0xef) {
-        (void)istr.get();
-        if (istr.get() == 0xbb && istr.peek() == 0xbf) {
-            (void)istr.get();
-        } else {
-            istr.unget();
-            istr.unget();
-        }
-    }
-
-    return 0;
-}
-
 static bool isNameChar(unsigned char ch)
 {
     return std::isalnum(ch) || ch == '_' || ch == '$';
@@ -406,7 +563,7 @@ static std::string escapeString(const std::string &str)
     std::ostringstream ostr;
     ostr << '\"';
     for (std::size_t i = 1U; i < str.size() - 1; ++i) {
-        char c = str[i];
+        const char c = str[i];
         if (c == '\\' || c == '\"' || c == '\'')
             ostr << '\\';
         ostr << c;
@@ -449,26 +606,24 @@ void simplecpp::TokenList::lineDirective(unsigned int fileIndex, unsigned int li
     }
 }
 
-void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filename, OutputList *outputList)
+static const std::string COMMENT_END("*/");
+
+void simplecpp::TokenList::readfile(Stream &stream, const std::string &filename, OutputList *outputList)
 {
     std::stack<simplecpp::Location> loc;
 
     unsigned int multiline = 0U;
 
-    const Token *oldLastToken = NULL;
-
-    const unsigned short bom = getAndSkipBOM(istr);
+    const Token *oldLastToken = nullptr;
 
     Location location(files);
     location.fileIndex = fileIndex(filename);
     location.line = 1U;
     location.col  = 1U;
-    while (istr.good()) {
-        unsigned char ch = readChar(istr,bom);
-        if (!istr.good())
+    while (stream.good()) {
+        unsigned char ch = stream.readChar();
+        if (!stream.good())
             break;
-        if (ch < ' ' && ch != '\t' && ch != '\n' && ch != '\r')
-            ch = ' ';
 
         if (ch >= 0x80) {
             if (outputList) {
@@ -476,7 +631,7 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
                 err.type = simplecpp::Output::UNHANDLED_CHAR_ERROR;
                 err.location = location;
                 std::ostringstream s;
-                s << (int)ch;
+                s << static_cast<int>(ch);
                 err.msg = "The code contains unhandled character(s) (character code=" + s.str() + "). Neither unicode nor extended ascii is supported.";
                 outputList->push_back(err);
             }
@@ -499,16 +654,30 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
 
             if (oldLastToken != cback()) {
                 oldLastToken = cback();
+                if (!isLastLinePreprocessor())
+                    continue;
                 const std::string lastline(lastLine());
                 if (lastline == "# file %str%") {
+                    const Token *strtok = cback();
+                    while (strtok->comment)
+                        strtok = strtok->previous;
                     loc.push(location);
-                    location.fileIndex = fileIndex(cback()->str().substr(1U, cback()->str().size() - 2U));
+                    location.fileIndex = fileIndex(strtok->str().substr(1U, strtok->str().size() - 2U));
                     location.line = 1U;
                 } else if (lastline == "# line %num%") {
-                    lineDirective(location.fileIndex, std::atol(cback()->str().c_str()), &location);
+                    const Token *numtok = cback();
+                    while (numtok->comment)
+                        numtok = numtok->previous;
+                    lineDirective(location.fileIndex, std::atol(numtok->str().c_str()), &location);
                 } else if (lastline == "# %num% %str%" || lastline == "# line %num% %str%") {
-                    lineDirective(fileIndex(replaceAll(cback()->str().substr(1U, cback()->str().size() - 2U),"\\\\","\\")),
-                                  std::atol(cback()->previous->str().c_str()), &location);
+                    const Token *strtok = cback();
+                    while (strtok->comment)
+                        strtok = strtok->previous;
+                    const Token *numtok = strtok->previous;
+                    while (numtok->comment)
+                        numtok = numtok->previous;
+                    lineDirective(fileIndex(replaceAll(strtok->str().substr(1U, strtok->str().size() - 2U),"\\\\","\\")),
+                                  std::atol(numtok->str().c_str()), &location);
                 }
                 // #endfile
                 else if (lastline == "# endfile" && !loc.empty()) {
@@ -520,44 +689,47 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
             continue;
         }
 
-        if (std::isspace(ch)) {
+        if (ch <= ' ') {
             location.col++;
             continue;
         }
 
         TokenString currentToken;
 
-        if (cback() && cback()->location.line == location.line && cback()->previous && cback()->previous->op == '#' && (lastLine() == "# error" || lastLine() == "# warning")) {
-            char prev = ' ';
-            while (istr.good() && (prev == '\\' || (ch != '\r' && ch != '\n'))) {
-                currentToken += ch;
-                prev = ch;
-                ch = readChar(istr, bom);
+        if (cback() && cback()->location.line == location.line && cback()->previous && cback()->previous->op == '#') {
+            const Token* const llTok = lastLineTok();
+            if (llTok && llTok->op == '#' && llTok->next && (llTok->next->str() == "error" || llTok->next->str() == "warning")) {
+                char prev = ' ';
+                while (stream.good() && (prev == '\\' || (ch != '\r' && ch != '\n'))) {
+                    currentToken += ch;
+                    prev = ch;
+                    ch = stream.readChar();
+                }
+                stream.ungetChar();
+                push_back(new Token(currentToken, location));
+                location.adjust(currentToken);
+                continue;
             }
-            ungetChar(istr, bom);
-            push_back(new Token(currentToken, location));
-            location.adjust(currentToken);
-            continue;
         }
 
         // number or name
         if (isNameChar(ch)) {
             const bool num = std::isdigit(ch);
-            while (istr.good() && isNameChar(ch)) {
+            while (stream.good() && isNameChar(ch)) {
                 currentToken += ch;
-                ch = readChar(istr,bom);
-                if (num && ch=='\'' && isNameChar(peekChar(istr,bom)))
-                    ch = readChar(istr,bom);
+                ch = stream.readChar();
+                if (num && ch=='\'' && isNameChar(stream.peekChar()))
+                    ch = stream.readChar();
             }
 
-            ungetChar(istr,bom);
+            stream.ungetChar();
         }
 
         // comment
-        else if (ch == '/' && peekChar(istr,bom) == '/') {
-            while (istr.good() && ch != '\r' && ch != '\n') {
+        else if (ch == '/' && stream.peekChar() == '/') {
+            while (stream.good() && ch != '\r' && ch != '\n') {
                 currentToken += ch;
-                ch = readChar(istr, bom);
+                ch = stream.readChar();
             }
             const std::string::size_type pos = currentToken.find_last_not_of(" \t");
             if (pos < currentToken.size() - 1U && currentToken[pos] == '\\')
@@ -566,20 +738,20 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
                 ++multiline;
                 currentToken.erase(currentToken.size() - 1U);
             } else {
-                ungetChar(istr, bom);
+                stream.ungetChar();
             }
         }
 
         // comment
-        else if (ch == '/' && peekChar(istr,bom) == '*') {
+        else if (ch == '/' && stream.peekChar() == '*') {
             currentToken = "/*";
-            (void)readChar(istr,bom);
-            ch = readChar(istr,bom);
-            while (istr.good()) {
+            (void)stream.readChar();
+            ch = stream.readChar();
+            while (stream.good()) {
                 currentToken += ch;
-                if (currentToken.size() >= 4U && endsWith(currentToken, "*/"))
+                if (currentToken.size() >= 4U && endsWith(currentToken, COMMENT_END))
                     break;
-                ch = readChar(istr,bom);
+                ch = stream.readChar();
             }
             // multiline..
 
@@ -588,7 +760,7 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
                 currentToken.erase(pos,2);
                 ++multiline;
             }
-            if (multiline || startsWith(lastLine(10),"# ")) {
+            if (multiline || isLastLinePreprocessor()) {
                 pos = 0;
                 while ((pos = currentToken.find('\n',pos)) != std::string::npos) {
                     currentToken.erase(pos,1);
@@ -610,12 +782,12 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
                 std::string delim;
                 currentToken = ch;
                 prefix.resize(prefix.size() - 1);
-                ch = readChar(istr,bom);
-                while (istr.good() && ch != '(' && ch != '\n') {
+                ch = stream.readChar();
+                while (stream.good() && ch != '(' && ch != '\n') {
                     delim += ch;
-                    ch = readChar(istr,bom);
+                    ch = stream.readChar();
                 }
-                if (!istr.good() || ch == '\n') {
+                if (!stream.good() || ch == '\n') {
                     if (outputList) {
                         Output err(files);
                         err.type = Output::SYNTAX_ERROR;
@@ -626,8 +798,8 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
                     return;
                 }
                 const std::string endOfRawString(')' + delim + currentToken);
-                while (istr.good() && !(endsWith(currentToken, endOfRawString) && currentToken.size() > 1))
-                    currentToken += readChar(istr,bom);
+                while (stream.good() && !(endsWith(currentToken, endOfRawString) && currentToken.size() > 1))
+                    currentToken += stream.readChar();
                 if (!endsWith(currentToken, endOfRawString)) {
                     if (outputList) {
                         Output err(files);
@@ -651,7 +823,7 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
                 continue;
             }
 
-            currentToken = readUntil(istr,location,ch,ch,outputList,bom);
+            currentToken = readUntil(stream,location,ch,ch,outputList);
             if (currentToken.size() < 2U)
                 // Error is reported by readUntil()
                 return;
@@ -669,12 +841,16 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
             else
                 back()->setstr(prefix + s);
 
-            if (newlines > 0 && lastLine().compare(0,9,"# define ") == 0) {
-                multiline += newlines;
-                location.adjust(s);
-            } else {
-                location.adjust(currentToken);
+            if (newlines > 0 ) {
+                const Token * const llTok = lastLineTok();
+                if (llTok && llTok->op == '#' && llTok->next && llTok->next->str() == "define" && llTok->next->next) {
+                    multiline += newlines;
+                    location.adjust(s);
+                    continue;
+                }
             }
+
+            location.adjust(currentToken);
             continue;
         }
 
@@ -682,10 +858,13 @@ void simplecpp::TokenList::readfile(std::istream &istr, const std::string &filen
             currentToken += ch;
         }
 
-        if (currentToken == "<" && lastLine() == "# include") {
-            currentToken = readUntil(istr, location, '<', '>', outputList, bom);
-            if (currentToken.size() < 2U)
-                return;
+        if (*currentToken.begin() == '<') {
+            const Token * const llTok = lastLineTok();
+            if (llTok && llTok->op == '#' && llTok->next && llTok->next->str() == "include") {
+                currentToken = readUntil(stream, location, '<', '>', outputList);
+                if (currentToken.size() < 2U)
+                    return;
+            }
         }
 
         push_back(new Token(currentToken, location));
@@ -774,10 +953,10 @@ void simplecpp::TokenList::combineOperators()
                 continue;
             }
             // float literals..
-            if (tok->previous && tok->previous->number) {
+            if (tok->previous && tok->previous->number && sameline(tok->previous, tok)) {
                 tok->setstr(tok->previous->str() + '.');
                 deleteToken(tok->previous);
-                if (isFloatSuffix(tok->next) || (tok->next && tok->next->startsWithOneOf("AaBbCcDdEeFfPp"))) {
+                if (sameline(tok, tok->next) && (isFloatSuffix(tok->next) || (tok->next && tok->next->startsWithOneOf("AaBbCcDdEeFfPp")))) {
                     tok->setstr(tok->str() + tok->next->str());
                     deleteToken(tok->next);
                 }
@@ -821,7 +1000,7 @@ void simplecpp::TokenList::combineOperators()
                     start = start->previous;
                 }
                 if (indentlevel == -1 && start) {
-                    const Token *ftok = start;
+                    const Token * const ftok = start;
                     bool isFuncDecl = ftok->name;
                     while (isFuncDecl) {
                         if (!start->name && start->str() != "::" && start->op != '*' && start->op != '&')
@@ -919,10 +1098,10 @@ void simplecpp::TokenList::constFoldMulDivRem(Token *tok)
         if (tok->op == '*')
             result = (stringToLL(tok->previous->str()) * stringToLL(tok->next->str()));
         else if (tok->op == '/' || tok->op == '%') {
-            long long rhs = stringToLL(tok->next->str());
+            const long long rhs = stringToLL(tok->next->str());
             if (rhs == 0)
                 throw std::overflow_error("division/modulo by zero");
-            long long lhs = stringToLL(tok->previous->str());
+            const long long lhs = stringToLL(tok->previous->str());
             if (rhs == -1 && lhs == std::numeric_limits<long long>::min())
                 throw std::overflow_error("division overflow");
             if (tok->op == '/')
@@ -1121,22 +1300,22 @@ void simplecpp::TokenList::removeComments()
 {
     Token *tok = frontToken;
     while (tok) {
-        Token *tok1 = tok;
+        Token * const tok1 = tok;
         tok = tok->next;
         if (tok1->comment)
             deleteToken(tok1);
     }
 }
 
-std::string simplecpp::TokenList::readUntil(std::istream &istr, const Location &location, const char start, const char end, OutputList *outputList, unsigned int bom)
+std::string simplecpp::TokenList::readUntil(Stream &stream, const Location &location, const char start, const char end, OutputList *outputList)
 {
     std::string ret;
     ret += start;
 
     bool backslash = false;
     char ch = 0;
-    while (ch != end && ch != '\r' && ch != '\n' && istr.good()) {
-        ch = readChar(istr, bom);
+    while (ch != end && ch != '\r' && ch != '\n' && stream.good()) {
+        ch = stream.readChar();
         if (backslash && ch == '\n') {
             ch = 0;
             backslash = false;
@@ -1148,7 +1327,7 @@ std::string simplecpp::TokenList::readUntil(std::istream &istr, const Location &
             bool update_ch = false;
             char next = 0;
             do {
-                next = readChar(istr, bom);
+                next = stream.readChar();
                 if (next == '\r' || next == '\n') {
                     ret.erase(ret.size()-1U);
                     backslash = (next == '\r');
@@ -1162,7 +1341,7 @@ std::string simplecpp::TokenList::readUntil(std::istream &istr, const Location &
         }
     }
 
-    if (!istr.good() || ch != end) {
+    if (!stream.good() || ch != end) {
         clear();
         if (outputList) {
             Output err(files);
@@ -1181,17 +1360,50 @@ std::string simplecpp::TokenList::lastLine(int maxsize) const
 {
     std::string ret;
     int count = 0;
-    for (const Token *tok = cback(); sameline(tok,cback()); tok = tok->previous) {
+    for (const Token *tok = cback(); ; tok = tok->previous) {
+        if (!sameline(tok, cback())) {
+            break;
+        }
         if (tok->comment)
             continue;
-        if (!ret.empty())
-            ret.insert(0, 1, ' ');
-        ret.insert(0, tok->str()[0] == '\"' ? std::string("%str%")
-                   : tok->number ? std::string("%num%") : tok->str());
         if (++count > maxsize)
             return "";
+        if (!ret.empty())
+            ret += ' ';
+        // add tokens in reverse for performance reasons
+        if (tok->str()[0] == '\"')
+            ret += "%rts%"; // %str%
+        else if (tok->number)
+            ret += "%mun%"; // %num%
+        else {
+            ret += tok->str();
+            std::reverse(ret.end() - tok->str().length(), ret.end());
+        }
     }
+    std::reverse(ret.begin(), ret.end());
     return ret;
+}
+
+const simplecpp::Token* simplecpp::TokenList::lastLineTok(int maxsize) const
+{
+    const Token* prevTok = nullptr;
+    int count = 0;
+    for (const Token *tok = cback(); ; tok = tok->previous) {
+        if (!sameline(tok, cback()))
+            break;
+        if (tok->comment)
+            continue;
+        if (++count > maxsize)
+            return nullptr;
+        prevTok = tok;
+    }
+    return prevTok;
+}
+
+bool simplecpp::TokenList::isLastLinePreprocessor(int maxsize) const
+{
+    const Token * const prevTok = lastLineTok(maxsize);
+    return prevTok && prevTok->op == '#';
 }
 
 unsigned int simplecpp::TokenList::fileIndex(const std::string &filename)
@@ -1206,12 +1418,19 @@ unsigned int simplecpp::TokenList::fileIndex(const std::string &filename)
 
 
 namespace simplecpp {
+    class Macro;
+#if __cplusplus >= 201103L
+    using MacroMap = std::unordered_map<TokenString,Macro>;
+#else
+    typedef std::map<TokenString,Macro> MacroMap;
+#endif
+
     class Macro {
     public:
-        explicit Macro(std::vector<std::string> &f) : nameTokDef(NULL), variadic(false), valueToken(NULL), endToken(NULL), files(f), tokenListDefine(f), valueDefinedInCode_(false) {}
+        explicit Macro(std::vector<std::string> &f) : nameTokDef(nullptr), valueToken(nullptr), endToken(nullptr), files(f), tokenListDefine(f), variadic(false), valueDefinedInCode_(false) {}
 
-        Macro(const Token *tok, std::vector<std::string> &f) : nameTokDef(NULL), files(f), tokenListDefine(f), valueDefinedInCode_(true) {
-            if (sameline(tok->previous, tok))
+        Macro(const Token *tok, std::vector<std::string> &f) : nameTokDef(nullptr), files(f), tokenListDefine(f), valueDefinedInCode_(true) {
+            if (sameline(tok->previousSkipComments(), tok))
                 throw std::runtime_error("bad macro syntax");
             if (tok->op != '#')
                 throw std::runtime_error("bad macro syntax");
@@ -1226,28 +1445,32 @@ namespace simplecpp {
                 throw std::runtime_error("bad macro syntax");
         }
 
-        Macro(const std::string &name, const std::string &value, std::vector<std::string> &f) : nameTokDef(NULL), files(f), tokenListDefine(f), valueDefinedInCode_(false) {
+        Macro(const std::string &name, const std::string &value, std::vector<std::string> &f) : nameTokDef(nullptr), files(f), tokenListDefine(f), valueDefinedInCode_(false) {
             const std::string def(name + ' ' + value);
             std::istringstream istr(def);
-            tokenListDefine.readfile(istr);
+            StdIStream stream(istr);
+            tokenListDefine.readfile(stream);
             if (!parseDefine(tokenListDefine.cfront()))
                 throw std::runtime_error("bad macro syntax. macroname=" + name + " value=" + value);
         }
 
-        Macro(const Macro &macro) : nameTokDef(NULL), files(macro.files), tokenListDefine(macro.files), valueDefinedInCode_(macro.valueDefinedInCode_) {
-            *this = macro;
+        Macro(const Macro &other) : nameTokDef(nullptr), files(other.files), tokenListDefine(other.files), valueDefinedInCode_(other.valueDefinedInCode_) {
+            *this = other;
         }
 
-        void operator=(const Macro &macro) {
-            if (this != &macro) {
-                valueDefinedInCode_ = macro.valueDefinedInCode_;
-                if (macro.tokenListDefine.empty())
-                    parseDefine(macro.nameTokDef);
+        Macro &operator=(const Macro &other) {
+            if (this != &other) {
+                files = other.files;
+                valueDefinedInCode_ = other.valueDefinedInCode_;
+                if (other.tokenListDefine.empty())
+                    parseDefine(other.nameTokDef);
                 else {
-                    tokenListDefine = macro.tokenListDefine;
+                    tokenListDefine = other.tokenListDefine;
                     parseDefine(tokenListDefine.cfront());
                 }
+                usageList = other.usageList;
             }
+            return *this;
         }
 
         bool valueDefinedInCode() const {
@@ -1265,7 +1488,7 @@ namespace simplecpp {
          */
         const Token * expand(TokenList * const output,
                              const Token * rawtok,
-                             const std::map<TokenString,Macro> &macros,
+                             const MacroMap &macros,
                              std::vector<std::string> &inputFiles) const {
             std::set<TokenString> expandedmacros;
 
@@ -1319,13 +1542,13 @@ namespace simplecpp {
                     break;
                 if (output2.cfront() != output2.cback() && macro2tok->str() == this->name())
                     break;
-                const std::map<TokenString,Macro>::const_iterator macro = macros.find(macro2tok->str());
+                const MacroMap::const_iterator macro = macros.find(macro2tok->str());
                 if (macro == macros.end() || !macro->second.functionLike())
                     break;
                 TokenList rawtokens2(inputFiles);
                 const Location loc(macro2tok->location);
                 while (macro2tok) {
-                    Token *next = macro2tok->next;
+                    Token * const next = macro2tok->next;
                     rawtokens2.push_back(new Token(macro2tok->str(), loc));
                     output2.deleteToken(macro2tok);
                     macro2tok = next;
@@ -1344,11 +1567,15 @@ namespace simplecpp {
                 }
                 if (!rawtok2 || par != 1U)
                     break;
-                if (macro->second.expand(&output2, rawtok->location, rawtokens2.cfront(), macros, expandedmacros) != NULL)
+                if (macro->second.expand(&output2, rawtok->location, rawtokens2.cfront(), macros, expandedmacros) != nullptr)
                     break;
                 rawtok = rawtok2->next;
             }
             output->takeTokens(output2);
+            for (Token* tok = output->front(); tok; tok = tok->next) {
+                if (tok->str() == INNER_COMMA)
+                    tok->setstr(",");
+            }
             return rawtok;
         }
 
@@ -1378,8 +1605,8 @@ namespace simplecpp {
         /** base class for errors */
         struct Error {
             Error(const Location &loc, const std::string &s) : location(loc), what(s) {}
-            Location location;
-            std::string what;
+            const Location location;
+            const std::string what;
         };
 
         /** Struct that is thrown when macro is expanded with wrong number of parameters */
@@ -1389,14 +1616,37 @@ namespace simplecpp {
 
         /** Struct that is thrown when there is invalid ## usage */
         struct invalidHashHash : public Error {
-            invalidHashHash(const Location &loc, const std::string &macroName) : Error(loc, "Invalid ## usage when expanding \'" + macroName + "\'.") {}
+            static inline std::string format(const std::string &macroName, const std::string &message) {
+                return "Invalid ## usage when expanding \'" + macroName + "\': " + message;
+            }
+
+            invalidHashHash(const Location &loc, const std::string &macroName, const std::string &message)
+                : Error(loc, format(macroName, message)) { }
+
+            static inline invalidHashHash unexpectedToken(const Location &loc, const std::string &macroName, const Token *tokenA) {
+                return invalidHashHash(loc, macroName, "Unexpected token '"+ tokenA->str()+"'");
+            }
+
+            static inline invalidHashHash cannotCombine(const Location &loc, const std::string &macroName, const Token *tokenA, const Token *tokenB) {
+                return invalidHashHash(loc, macroName, "Combining '"+ tokenA->str()+ "' and '"+ tokenB->str() + "' yields an invalid token.");
+            }
+
+            static inline invalidHashHash unexpectedNewline(const Location &loc, const std::string &macroName) {
+                return invalidHashHash(loc, macroName, "Unexpected newline");
+            }
+
+            static inline invalidHashHash universalCharacterUB(const Location &loc, const std::string &macroName, const Token* tokenA, const std::string& strAB) {
+                return invalidHashHash(loc, macroName, "Combining '\\"+ tokenA->str()+ "' and '"+ strAB.substr(tokenA->str().size()) + "' yields universal character '\\" + strAB + "'. This is undefined behavior according to C standard chapter 5.1.1.2, paragraph 4.");
+            }
         };
     private:
         /** Create new token where Token::macro is set for replaced tokens */
-        Token *newMacroToken(const TokenString &str, const Location &loc, bool replaced) const {
+        Token *newMacroToken(const TokenString &str, const Location &loc, bool replaced, const Token *expandedFromToken=nullptr) const {
             Token *tok = new Token(str,loc);
             if (replaced)
                 tok->macro = nameTokDef->str();
+            if (expandedFromToken)
+                tok->setExpandedFrom(expandedFromToken, this);
             return tok;
         }
 
@@ -1404,7 +1654,7 @@ namespace simplecpp {
             nameTokDef = nametoken;
             variadic = false;
             if (!nameTokDef) {
-                valueToken = endToken = NULL;
+                valueToken = endToken = nullptr;
                 args.clear();
                 return false;
             }
@@ -1428,17 +1678,17 @@ namespace simplecpp {
                 }
                 if (!sameline(nametoken, argtok)) {
                     endToken = argtok ? argtok->previous : argtok;
-                    valueToken = NULL;
+                    valueToken = nullptr;
                     return false;
                 }
-                valueToken = argtok ? argtok->next : NULL;
+                valueToken = argtok ? argtok->next : nullptr;
             } else {
                 args.clear();
                 valueToken = nameTokDef->next;
             }
 
             if (!sameline(valueToken, nameTokDef))
-                valueToken = NULL;
+                valueToken = nullptr;
             endToken = valueToken;
             while (sameline(endToken, nameTokDef))
                 endToken = endToken->next;
@@ -1462,7 +1712,7 @@ namespace simplecpp {
             std::vector<const Token *> parametertokens;
             parametertokens.push_back(nameTokInst->next);
             unsigned int par = 0U;
-            for (const Token *tok = nameTokInst->next->next; calledInDefine ? sameline(tok, nameTokInst) : (tok != NULL); tok = tok->next) {
+            for (const Token *tok = nameTokInst->next->next; calledInDefine ? sameline(tok, nameTokInst) : (tok != nullptr); tok = tok->next) {
                 if (tok->op == '(')
                     ++par;
                 else if (tok->op == ')') {
@@ -1480,11 +1730,11 @@ namespace simplecpp {
         const Token *appendTokens(TokenList *tokens,
                                   const Location &rawloc,
                                   const Token * const lpar,
-                                  const std::map<TokenString,Macro> &macros,
+                                  const MacroMap &macros,
                                   const std::set<TokenString> &expandedmacros,
                                   const std::vector<const Token*> &parametertokens) const {
             if (!lpar || lpar->op != '(')
-                return NULL;
+                return nullptr;
             unsigned int par = 0;
             const Token *tok = lpar;
             while (sameline(lpar, tok)) {
@@ -1496,11 +1746,16 @@ namespace simplecpp {
                 } else {
                     if (!expandArg(tokens, tok, rawloc, macros, expandedmacros, parametertokens)) {
                         bool expanded = false;
-                        const std::map<TokenString, Macro>::const_iterator it = macros.find(tok->str());
+                        const MacroMap::const_iterator it = macros.find(tok->str());
                         if (it != macros.end() && expandedmacros.find(tok->str()) == expandedmacros.end()) {
                             const Macro &m = it->second;
                             if (!m.functionLike()) {
+                                Token* mtok = tokens->back();
                                 m.expand(tokens, rawloc, tok, macros, expandedmacros);
+                                for (mtok = mtok->next; mtok; mtok = mtok->next) {
+                                    if (mtok->op == ',')
+                                        mtok->setstr(INNER_COMMA);
+                                }
                                 expanded = true;
                             }
                         }
@@ -1523,10 +1778,10 @@ namespace simplecpp {
             }
             for (Token *tok2 = tokens->front(); tok2; tok2 = tok2->next)
                 tok2->location = lpar->location;
-            return sameline(lpar,tok) ? tok : NULL;
+            return sameline(lpar,tok) ? tok : nullptr;
         }
 
-        const Token * expand(TokenList * const output, const Location &loc, const Token * const nameTokInst, const std::map<TokenString,Macro> &macros, std::set<TokenString> expandedmacros, bool first=false) const {
+        const Token * expand(TokenList * const output, const Location &loc, const Token * const nameTokInst, const MacroMap &macros, std::set<TokenString> expandedmacros, bool first=false) const {
 
             if (!first)
                 expandedmacros.insert(nameTokInst->str());
@@ -1581,7 +1836,7 @@ namespace simplecpp {
                     }
                 }
 
-                const std::map<TokenString,Macro>::const_iterator m = macros.find("__COUNTER__");
+                const MacroMap::const_iterator m = macros.find("__COUNTER__");
 
                 if (!counter || m == macros.end())
                     parametertokens2.swap(parametertokens1);
@@ -1611,15 +1866,15 @@ namespace simplecpp {
                     // A##B => AB
                     if (sameline(tok, tok->next) && tok->next && tok->next->op == '#' && tok->next->next && tok->next->next->op == '#') {
                         if (!sameline(tok, tok->next->next->next))
-                            throw invalidHashHash(tok->location, name());
+                            throw invalidHashHash::unexpectedNewline(tok->location, name());
                         TokenList new_output(files);
                         if (!expandArg(&new_output, tok, parametertokens2))
-                            output->push_back(newMacroToken(tok->str(), loc, isReplaced(expandedmacros)));
+                            output->push_back(newMacroToken(tok->str(), loc, isReplaced(expandedmacros), tok));
                         else if (new_output.empty()) // placemarker token
                             output->push_back(newMacroToken("", loc, isReplaced(expandedmacros)));
                         else
                             for (const Token *tok2 = new_output.cfront(); tok2; tok2 = tok2->next)
-                                output->push_back(newMacroToken(tok2->str(), loc, isReplaced(expandedmacros)));
+                                output->push_back(newMacroToken(tok2->str(), loc, isReplaced(expandedmacros), tok2));
                         tok = tok->next;
                     } else {
                         tok = expandToken(output, loc, tok, macros, expandedmacros, parametertokens2);
@@ -1672,7 +1927,7 @@ namespace simplecpp {
             return functionLike() ? parametertokens2.back()->next : nameTokInst->next;
         }
 
-        const Token *recursiveExpandToken(TokenList *output, TokenList &temp, const Location &loc, const Token *tok, const std::map<TokenString,Macro> &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
+        const Token *recursiveExpandToken(TokenList *output, TokenList &temp, const Location &loc, const Token *tok, const MacroMap &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
             if (!(temp.cback() && temp.cback()->name && tok->next && tok->next->op == '(')) {
                 output->takeTokens(temp);
                 return tok->next;
@@ -1683,7 +1938,7 @@ namespace simplecpp {
                 return tok->next;
             }
 
-            const std::map<TokenString, Macro>::const_iterator it = macros.find(temp.cback()->str());
+            const MacroMap::const_iterator it = macros.find(temp.cback()->str());
             if (it == macros.end() || expandedmacros.find(temp.cback()->str()) != expandedmacros.end()) {
                 output->takeTokens(temp);
                 return tok->next;
@@ -1698,7 +1953,7 @@ namespace simplecpp {
             TokenList temp2(files);
             temp2.push_back(new Token(temp.cback()->str(), tok->location));
 
-            const Token *tok2 = appendTokens(&temp2, loc, tok->next, macros, expandedmacros, parametertokens);
+            const Token * const tok2 = appendTokens(&temp2, loc, tok->next, macros, expandedmacros, parametertokens);
             if (!tok2)
                 return tok->next;
             output->takeTokens(temp);
@@ -1707,22 +1962,44 @@ namespace simplecpp {
             return tok2->next;
         }
 
-        const Token *expandToken(TokenList *output, const Location &loc, const Token *tok, const std::map<TokenString,Macro> &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
+        const Token *expandToken(TokenList *output, const Location &loc, const Token *tok, const MacroMap &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
             // Not name..
             if (!tok->name) {
-                output->push_back(newMacroToken(tok->str(), loc, true));
+                output->push_back(newMacroToken(tok->str(), loc, true, tok));
                 return tok->next;
             }
 
             // Macro parameter..
             {
                 TokenList temp(files);
-                if (expandArg(&temp, tok, loc, macros, expandedmacros, parametertokens))
+                if (tok->str() == "__VA_OPT__") {
+                    if (sameline(tok, tok->next) && tok->next->str() == "(") {
+                        tok = tok->next;
+                        int paren = 1;
+                        while (sameline(tok, tok->next)) {
+                            if (tok->next->str() == "(")
+                              ++paren;
+                            else if (tok->next->str() == ")")
+                              --paren;
+                            if (paren == 0)
+                              return tok->next->next;
+                            tok = tok->next;
+                            if (parametertokens.size() > args.size() && parametertokens.front()->next->str() != ")")
+                              tok = expandToken(output, loc, tok, macros, expandedmacros, parametertokens)->previous;
+                        }
+                    }
+                    throw Error(tok->location, "Missing parenthesis for __VA_OPT__(content)");
+                }
+                if (expandArg(&temp, tok, loc, macros, expandedmacros, parametertokens)) {
+                    if (tok->str() == "__VA_ARGS__" && temp.empty() && output->cback() && output->cback()->str() == "," &&
+                        tok->nextSkipComments() && tok->nextSkipComments()->str() == ")")
+                        output->deleteToken(output->back());
                     return recursiveExpandToken(output, temp, loc, tok, macros, expandedmacros, parametertokens);
+                }
             }
 
             // Macro..
-            const std::map<TokenString, Macro>::const_iterator it = macros.find(tok->str());
+            const MacroMap::const_iterator it = macros.find(tok->str());
             if (it != macros.end() && expandedmacros.find(tok->str()) == expandedmacros.end()) {
                 std::set<std::string> expandedmacros2(expandedmacros);
                 expandedmacros2.insert(tok->str());
@@ -1734,14 +2011,14 @@ namespace simplecpp {
                     return recursiveExpandToken(output, temp, loc, tok, macros, expandedmacros2, parametertokens);
                 }
                 if (!sameline(tok, tok->next) || tok->next->op != '(') {
-                    output->push_back(newMacroToken(tok->str(), loc, true));
+                    output->push_back(newMacroToken(tok->str(), loc, true, tok));
                     return tok->next;
                 }
                 TokenList tokens(files);
                 tokens.push_back(new Token(*tok));
-                const Token *tok2 = appendTokens(&tokens, loc, tok->next, macros, expandedmacros, parametertokens);
+                const Token * const tok2 = appendTokens(&tokens, loc, tok->next, macros, expandedmacros, parametertokens);
                 if (!tok2) {
-                    output->push_back(newMacroToken(tok->str(), loc, true));
+                    output->push_back(newMacroToken(tok->str(), loc, true, tok));
                     return tok->next;
                 }
                 TokenList temp(files);
@@ -1749,12 +2026,12 @@ namespace simplecpp {
                 return recursiveExpandToken(output, temp, loc, tok2, macros, expandedmacros2, parametertokens);
             }
 
-            else if (tok->str() == DEFINED) {
-                const Token *tok2 = tok->next;
-                const Token *tok3 = tok2 ? tok2->next : NULL;
-                const Token *tok4 = tok3 ? tok3->next : NULL;
-                const Token *defToken = NULL;
-                const Token *lastToken = NULL;
+            if (tok->str() == DEFINED) {
+                const Token * const tok2 = tok->next;
+                const Token * const tok3 = tok2 ? tok2->next : nullptr;
+                const Token * const tok4 = tok3 ? tok3->next : nullptr;
+                const Token *defToken = nullptr;
+                const Token *lastToken = nullptr;
                 if (sameline(tok, tok4) && tok2->op == '(' && tok3->name && tok4->op == ')') {
                     defToken = tok3;
                     lastToken = tok4;
@@ -1779,7 +2056,7 @@ namespace simplecpp {
                 }
             }
 
-            output->push_back(newMacroToken(tok->str(), loc, true));
+            output->push_back(newMacroToken(tok->str(), loc, true, tok));
             return tok->next;
         }
 
@@ -1801,7 +2078,7 @@ namespace simplecpp {
             return true;
         }
 
-        bool expandArg(TokenList *output, const Token *tok, const Location &loc, const std::map<TokenString, Macro> &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
+        bool expandArg(TokenList *output, const Token *tok, const Location &loc, const MacroMap &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
             if (!tok->name)
                 return false;
             const unsigned int argnr = getArgNum(tok->str());
@@ -1810,11 +2087,11 @@ namespace simplecpp {
             if (variadic && argnr + 1U >= parametertokens.size()) // empty variadic parameter
                 return true;
             for (const Token *partok = parametertokens[argnr]->next; partok != parametertokens[argnr + 1U];) {
-                const std::map<TokenString, Macro>::const_iterator it = macros.find(partok->str());
-                if (it != macros.end() && (partok->str() == name() || expandedmacros.find(partok->str()) == expandedmacros.end()))
+                const MacroMap::const_iterator it = macros.find(partok->str());
+                if (it != macros.end() && !partok->isExpandedFrom(&it->second) && (partok->str() == name() || expandedmacros.find(partok->str()) == expandedmacros.end()))
                     partok = it->second.expand(output, loc, partok, macros, expandedmacros);
                 else {
-                    output->push_back(newMacroToken(partok->str(), loc, isReplaced(expandedmacros)));
+                    output->push_back(newMacroToken(partok->str(), loc, isReplaced(expandedmacros), partok));
                     output->back()->macro = partok->macro;
                     partok = partok->next;
                 }
@@ -1832,7 +2109,7 @@ namespace simplecpp {
          * @param parametertokens  parameters given when expanding this macro
          * @return token after the X
          */
-        const Token *expandHash(TokenList *output, const Location &loc, const Token *tok, const std::map<TokenString, Macro> &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
+        const Token *expandHash(TokenList *output, const Location &loc, const Token *tok, const MacroMap &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
             TokenList tokenListHash(files);
             tok = expandToken(&tokenListHash, loc, tok->next, macros, expandedmacros, parametertokens);
             std::ostringstream ostr;
@@ -1855,74 +2132,101 @@ namespace simplecpp {
          * @param parametertokens  parameters given when expanding this macro
          * @return token after B
          */
-        const Token *expandHashHash(TokenList *output, const Location &loc, const Token *tok, const std::map<TokenString, Macro> &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
+        const Token *expandHashHash(TokenList *output, const Location &loc, const Token *tok, const MacroMap &macros, const std::set<TokenString> &expandedmacros, const std::vector<const Token*> &parametertokens) const {
             Token *A = output->back();
             if (!A)
-                throw invalidHashHash(tok->location, name());
+                throw invalidHashHash(tok->location, name(), "Missing first argument");
             if (!sameline(tok, tok->next) || !sameline(tok, tok->next->next))
-                throw invalidHashHash(tok->location, name());
+                throw invalidHashHash::unexpectedNewline(tok->location, name());
 
-            bool canBeConcatenatedWithEqual = A->isOneOf("+-*/%&|^") || A->str() == "<<" || A->str() == ">>";
-            if (!A->name && !A->number && A->op != ',' && !A->str().empty() && !canBeConcatenatedWithEqual)
-                throw invalidHashHash(tok->location, name());
+            const bool canBeConcatenatedWithEqual = A->isOneOf("+-*/%&|^") || A->str() == "<<" || A->str() == ">>";
+            const bool canBeConcatenatedStringOrChar = isStringLiteral_(A->str()) || isCharLiteral_(A->str());
+            if (!A->name && !A->number && A->op != ',' && !A->str().empty() && !canBeConcatenatedWithEqual && !canBeConcatenatedStringOrChar)
+                throw invalidHashHash::unexpectedToken(tok->location, name(), A);
 
-            Token *B = tok->next->next;
+            Token * const B = tok->next->next;
             if (!B->name && !B->number && B->op && !B->isOneOf("#="))
-                throw invalidHashHash(tok->location, name());
+                throw invalidHashHash::unexpectedToken(tok->location, name(), B);
 
             if ((canBeConcatenatedWithEqual && B->op != '=') ||
                 (!canBeConcatenatedWithEqual && B->op == '='))
-                throw invalidHashHash(tok->location, name());
+                throw invalidHashHash::cannotCombine(tok->location, name(), A, B);
 
-            std::string strAB;
-
-            const bool varargs = variadic && args.size() >= 1U && B->str() == args[args.size()-1U];
+            // Superficial check; more in-depth would in theory be possible _after_ expandArg
+            if (canBeConcatenatedStringOrChar && (B->number || !B->name))
+                throw invalidHashHash::cannotCombine(tok->location, name(), A, B);
 
             TokenList tokensB(files);
-            if (expandArg(&tokensB, B, parametertokens)) {
-                if (tokensB.empty())
-                    strAB = A->str();
-                else if (varargs && A->op == ',') {
-                    strAB = ",";
-                } else {
-                    strAB = A->str() + tokensB.cfront()->str();
-                    tokensB.deleteToken(tokensB.front());
-                }
-            } else {
-                strAB = A->str() + B->str();
-            }
-
             const Token *nextTok = B->next;
-            if (varargs && tokensB.empty() && tok->previous->str() == ",")
-                output->deleteToken(A);
-            else if (strAB != "," && macros.find(strAB) == macros.end()) {
-                A->setstr(strAB);
-                for (Token *b = tokensB.front(); b; b = b->next)
-                    b->location = loc;
-                output->takeTokens(tokensB);
-            } else if (nextTok->op == '#' && nextTok->next->op == '#') {
-                TokenList output2(files);
-                output2.push_back(new Token(strAB, tok->location));
-                nextTok = expandHashHash(&output2, loc, nextTok, macros, expandedmacros, parametertokens);
-                output->deleteToken(A);
-                output->takeTokens(output2);
-            } else {
-                output->deleteToken(A);
-                TokenList tokens(files);
-                tokens.push_back(new Token(strAB, tok->location));
-                // for function like macros, push the (...)
-                if (tokensB.empty() && sameline(B,B->next) && B->next->op=='(') {
-                    const std::map<TokenString,Macro>::const_iterator it = macros.find(strAB);
-                    if (it != macros.end() && expandedmacros.find(strAB) == expandedmacros.end() && it->second.functionLike()) {
-                        const Token *tok2 = appendTokens(&tokens, loc, B->next, macros, expandedmacros, parametertokens);
-                        if (tok2)
-                            nextTok = tok2->next;
-                    }
+
+            if (canBeConcatenatedStringOrChar) {
+                // It seems clearer to handle this case separately even though the code is similar-ish, but we don't want to merge here.
+                // TODO The question is whether the ## or varargs may still apply, and how to provoke?
+                if (expandArg(&tokensB, B, parametertokens)) {
+                    for (Token *b = tokensB.front(); b; b = b->next)
+                        b->location = loc;
+                } else {
+                    tokensB.push_back(new Token(*B));
+                    tokensB.back()->location = loc;
                 }
-                expandToken(output, loc, tokens.cfront(), macros, expandedmacros, parametertokens);
-                for (Token *b = tokensB.front(); b; b = b->next)
-                    b->location = loc;
                 output->takeTokens(tokensB);
+            } else {
+                std::string strAB;
+
+                const bool varargs = variadic && !args.empty() && B->str() == args[args.size()-1U];
+
+                if (expandArg(&tokensB, B, parametertokens)) {
+                    if (tokensB.empty())
+                        strAB = A->str();
+                    else if (varargs && A->op == ',') {
+                        strAB = ",";
+                    } else {
+                        strAB = A->str() + tokensB.cfront()->str();
+                        tokensB.deleteToken(tokensB.front());
+                    }
+                } else {
+                    strAB = A->str() + B->str();
+                }
+
+                // producing universal character is undefined behavior
+                if (A->previous && A->previous->str() == "\\") {
+                    if (strAB[0] == 'u' && strAB.size() == 5)
+                        throw invalidHashHash::universalCharacterUB(tok->location, name(), A, strAB);
+                    if (strAB[0] == 'U' && strAB.size() == 9)
+                        throw invalidHashHash::universalCharacterUB(tok->location, name(), A, strAB);
+                }
+
+                if (varargs && tokensB.empty() && tok->previous->str() == ",")
+                    output->deleteToken(A);
+                else if (strAB != "," && macros.find(strAB) == macros.end()) {
+                    A->setstr(strAB);
+                    for (Token *b = tokensB.front(); b; b = b->next)
+                        b->location = loc;
+                    output->takeTokens(tokensB);
+                } else if (sameline(B, nextTok) && sameline(B, nextTok->next) && nextTok->op == '#' && nextTok->next->op == '#') {
+                    TokenList output2(files);
+                    output2.push_back(new Token(strAB, tok->location));
+                    nextTok = expandHashHash(&output2, loc, nextTok, macros, expandedmacros, parametertokens);
+                    output->deleteToken(A);
+                    output->takeTokens(output2);
+                } else {
+                    output->deleteToken(A);
+                    TokenList tokens(files);
+                    tokens.push_back(new Token(strAB, tok->location));
+                    // for function like macros, push the (...)
+                    if (tokensB.empty() && sameline(B,B->next) && B->next->op=='(') {
+                        const MacroMap::const_iterator it = macros.find(strAB);
+                        if (it != macros.end() && expandedmacros.find(strAB) == expandedmacros.end() && it->second.functionLike()) {
+                            const Token * const tok2 = appendTokens(&tokens, loc, B->next, macros, expandedmacros, parametertokens);
+                            if (tok2)
+                                nextTok = tok2->next;
+                        }
+                    }
+                    expandToken(output, loc, tokens.cfront(), macros, expandedmacros, parametertokens);
+                    for (Token *b = tokensB.front(); b; b = b->next)
+                        b->location = loc;
+                    output->takeTokens(tokensB);
+                }
             }
 
             return nextTok;
@@ -1943,9 +2247,6 @@ namespace simplecpp {
         /** arguments for macro */
         std::vector<TokenString> args;
 
-        /** is macro variadic? */
-        bool variadic;
-
         /** first token in replacement string */
         const Token *valueToken;
 
@@ -1961,6 +2262,9 @@ namespace simplecpp {
         /** usage of this macro */
         mutable std::list<Location> usageList;
 
+        /** is macro variadic? */
+        bool variadic;
+
         /** was the value of this macro actually defined in the code? */
         bool valueDefinedInCode_;
     };
@@ -1968,13 +2272,19 @@ namespace simplecpp {
 
 namespace simplecpp {
 
+#ifdef __CYGWIN__
+    bool startsWith(const std::string &str, const std::string &s)
+    {
+        return (str.size() >= s.size() && str.compare(0, s.size(), s) == 0);
+    }
+
     std::string convertCygwinToWindowsPath(const std::string &cygwinPath)
     {
         std::string windowsPath;
 
         std::string::size_type pos = 0;
         if (cygwinPath.size() >= 11 && startsWith(cygwinPath, "/cygdrive/")) {
-            unsigned char driveLetter = cygwinPath[10];
+            const unsigned char driveLetter = cygwinPath[10];
             if (std::isalpha(driveLetter)) {
                 if (cygwinPath.size() == 11) {
                     windowsPath = toupper(driveLetter);
@@ -1997,67 +2307,86 @@ namespace simplecpp {
 
         return windowsPath;
     }
+#endif
 }
 
 #ifdef SIMPLECPP_WINDOWS
 
-class ScopedLock {
+#if __cplusplus >= 201103L
+using MyMutex = std::mutex;
+template<class T>
+using MyLock = std::lock_guard<T>;
+#else
+class MyMutex {
 public:
-    explicit ScopedLock(CRITICAL_SECTION& criticalSection)
-        : m_criticalSection(criticalSection) {
-        EnterCriticalSection(&m_criticalSection);
-    }
-
-    ~ScopedLock() {
-        LeaveCriticalSection(&m_criticalSection);
-    }
-
-private:
-    ScopedLock& operator=(const ScopedLock&);
-    ScopedLock(const ScopedLock&);
-
-    CRITICAL_SECTION& m_criticalSection;
-};
-
-class RealFileNameMap {
-public:
-    RealFileNameMap() {
+    MyMutex() {
         InitializeCriticalSection(&m_criticalSection);
     }
 
-    ~RealFileNameMap() {
+    ~MyMutex() {
         DeleteCriticalSection(&m_criticalSection);
     }
 
-    bool getCacheEntry(const std::string& path, std::string* returnPath) {
-        ScopedLock lock(m_criticalSection);
+    CRITICAL_SECTION* lock() {
+        return &m_criticalSection;
+    }
+private:
+    CRITICAL_SECTION m_criticalSection;
+};
 
-        std::map<std::string, std::string>::iterator it = m_fileMap.find(path);
+template<typename T>
+class MyLock {
+public:
+    explicit MyLock(T& m)
+        : m_mutex(m) {
+        EnterCriticalSection(m_mutex.lock());
+    }
+
+    ~MyLock() {
+        LeaveCriticalSection(m_mutex.lock());
+    }
+
+private:
+    MyLock& operator=(const MyLock&);
+    MyLock(const MyLock&);
+
+    T& m_mutex;
+};
+#endif
+
+class RealFileNameMap {
+public:
+    RealFileNameMap() {}
+
+    bool getCacheEntry(const std::string& path, std::string& returnPath) {
+        MyLock<MyMutex> lock(m_mutex);
+
+        const std::map<std::string, std::string>::iterator it = m_fileMap.find(path);
         if (it != m_fileMap.end()) {
-            *returnPath = it->second;
+            returnPath = it->second;
             return true;
         }
         return false;
     }
 
     void addToCache(const std::string& path, const std::string& actualPath) {
-        ScopedLock lock(m_criticalSection);
+        MyLock<MyMutex> lock(m_mutex);
         m_fileMap[path] = actualPath;
     }
 
 private:
     std::map<std::string, std::string> m_fileMap;
-    CRITICAL_SECTION m_criticalSection;
+    MyMutex m_mutex;
 };
 
 static RealFileNameMap realFileNameMap;
 
-static bool realFileName(const std::string &f, std::string *result)
+static bool realFileName(const std::string &f, std::string &result)
 {
     // are there alpha characters in last subpath?
     bool alpha = false;
     for (std::string::size_type pos = 1; pos <= f.size(); ++pos) {
-        unsigned char c = f[f.size() - pos];
+        const unsigned char c = f[f.size() - pos];
         if (c == '/' || c == '\\')
             break;
         if (std::isalpha(c)) {
@@ -2076,16 +2405,16 @@ static bool realFileName(const std::string &f, std::string *result)
         WIN32_FIND_DATAA FindFileData;
 
 #ifdef __CYGWIN__
-        std::string fConverted = simplecpp::convertCygwinToWindowsPath(f);
-        HANDLE hFind = FindFirstFileExA(fConverted.c_str(), FindExInfoBasic, &FindFileData, FindExSearchNameMatch, NULL, 0);
+        const std::string fConverted = simplecpp::convertCygwinToWindowsPath(f);
+        const HANDLE hFind = FindFirstFileExA(fConverted.c_str(), FindExInfoBasic, &FindFileData, FindExSearchNameMatch, NULL, 0);
 #else
         HANDLE hFind = FindFirstFileExA(f.c_str(), FindExInfoBasic, &FindFileData, FindExSearchNameMatch, NULL, 0);
 #endif
 
         if (INVALID_HANDLE_VALUE == hFind)
             return false;
-        *result = FindFileData.cFileName;
-        realFileNameMap.addToCache(f, *result);
+        result = FindFileData.cFileName;
+        realFileNameMap.addToCache(f, result);
         FindClose(hFind);
     }
     return true;
@@ -2098,14 +2427,14 @@ static std::string realFilename(const std::string &f)
 {
     std::string ret;
     ret.reserve(f.size()); // this will be the final size
-    if (realFilePathMap.getCacheEntry(f, &ret))
+    if (realFilePathMap.getCacheEntry(f, ret))
         return ret;
 
     // Current subpath
     std::string subpath;
 
     for (std::string::size_type pos = 0; pos < f.size(); ++pos) {
-        unsigned char c = f[pos];
+        const unsigned char c = f[pos];
 
         // Separator.. add subpath and separator
         if (c == '/' || c == '\\') {
@@ -2115,12 +2444,12 @@ static std::string realFilename(const std::string &f)
                 continue;
             }
 
-            bool isDriveSpecification =
+            const bool isDriveSpecification =
                 (pos == 2 && subpath.size() == 2 && std::isalpha(subpath[0]) && subpath[1] == ':');
 
             // Append real filename (proper case)
             std::string f2;
-            if (!isDriveSpecification && realFileName(f.substr(0, pos), &f2))
+            if (!isDriveSpecification && realFileName(f.substr(0, pos), f2))
                 ret += f2;
             else
                 ret += subpath;
@@ -2136,7 +2465,7 @@ static std::string realFilename(const std::string &f)
 
     if (!subpath.empty()) {
         std::string f2;
-        if (realFileName(f,&f2))
+        if (realFileName(f,f2))
             ret += f2;
         else
             ret += subpath;
@@ -2205,14 +2534,19 @@ namespace simplecpp {
                 continue;
             }
             // get previous subpath
-            const std::string::size_type pos1 = path.rfind('/', pos - 1U) + 1U;
-            const std::string previousSubPath = path.substr(pos1, pos-pos1);
+            std::string::size_type pos1 = path.rfind('/', pos - 1U);
+            if (pos1 == std::string::npos) {
+                pos1 = 0;
+            } else {
+                pos1 += 1U;
+            }
+            const std::string previousSubPath = path.substr(pos1, pos - pos1);
             if (previousSubPath == "..") {
                 // don't simplify
                 ++pos;
             } else {
                 // remove previous subpath and ".."
-                path.erase(pos1,pos-pos1+4);
+                path.erase(pos1, pos - pos1 + 4);
                 if (path.empty())
                     path = ".";
                 // update pos
@@ -2227,7 +2561,8 @@ namespace simplecpp {
         if (unc)
             path = '/' + path;
 
-        return path.find_first_of("*?") == std::string::npos ? realFilename(path) : path;
+        // cppcheck-suppress duplicateExpressionTernary - platform-dependent implementation
+        return strpbrk(path.c_str(), "*?") == nullptr ? realFilename(path) : path;
     }
 }
 
@@ -2278,6 +2613,73 @@ static void simplifySizeof(simplecpp::TokenList &expr, const std::map<std::strin
     }
 }
 
+/** Evaluate __has_include(file) */
+static bool isCpp17OrLater(const simplecpp::DUI &dui)
+{
+    const std::string std_ver = simplecpp::getCppStdString(dui.std);
+    return !std_ver.empty() && (std_ver >= "201703L");
+}
+
+static std::string openHeader(std::ifstream &f, const simplecpp::DUI &dui, const std::string &sourcefile, const std::string &header, bool systemheader);
+static void simplifyHasInclude(simplecpp::TokenList &expr, const simplecpp::DUI &dui)
+{
+    if (!isCpp17OrLater(dui))
+        return;
+
+    for (simplecpp::Token *tok = expr.front(); tok; tok = tok->next) {
+        if (tok->str() != HAS_INCLUDE)
+            continue;
+        simplecpp::Token *tok1 = tok->next;
+        if (!tok1) {
+            throw std::runtime_error("missing __has_include argument");
+        }
+        simplecpp::Token *tok2 = tok1->next;
+        if (!tok2) {
+            throw std::runtime_error("missing __has_include argument");
+        }
+        if (tok1->op == '(') {
+            tok1 = tok1->next;
+            while (tok2->op != ')') {
+                tok2 = tok2->next;
+                if (!tok2) {
+                    throw std::runtime_error("invalid __has_include expression");
+                }
+            }
+        }
+
+        const std::string &sourcefile = tok->location.file();
+        const bool systemheader = (tok1 && tok1->op == '<');
+        std::string header;
+        if (systemheader) {
+            simplecpp::Token *tok3 = tok1->next;
+            if (!tok3) {
+                throw std::runtime_error("missing __has_include closing angular bracket");
+            }
+            while (tok3->op != '>') {
+                tok3 = tok3->next;
+                if (!tok3) {
+                    throw std::runtime_error("invalid __has_include expression");
+                }
+            }
+
+            for (simplecpp::Token *headerToken = tok1->next; headerToken != tok3; headerToken = headerToken->next)
+                header += headerToken->str();
+            // cppcheck-suppress selfAssignment - platform-dependent implementation
+            header = realFilename(header);
+        }
+        else {
+            header = realFilename(tok1->str().substr(1U, tok1->str().size() - 2U));
+        }
+        std::ifstream f;
+        const std::string header2 = openHeader(f,dui,sourcefile,header,systemheader);
+        tok->setstr(header2.empty() ? "0" : "1");
+
+        tok2 = tok2->next;
+        while (tok->next != tok2)
+            expr.deleteToken(tok->next);
+    }
+}
+
 static const char * const altopData[] = {"and","or","bitand","bitor","compl","not","not_eq","xor"};
 static const std::set<std::string> altop(&altopData[0], &altopData[8]);
 static void simplifyName(simplecpp::TokenList &expr)
@@ -2315,10 +2717,10 @@ static unsigned long long stringToULLbounded(
     std::size_t maxlen = std::string::npos
 )
 {
-    std::string sub = s.substr(pos, maxlen);
-    const char* start = sub.c_str();
+    const std::string sub = s.substr(pos, maxlen);
+    const char * const start = sub.c_str();
     char* end;
-    unsigned long long value = std::strtoull(start, &end, base);
+    const unsigned long long value = std::strtoull(start, &end, base);
     pos += end - start;
     if (end - start < minlen)
         throw std::runtime_error("expected digit");
@@ -2362,7 +2764,7 @@ long long simplecpp::characterLiteralToLL(const std::string& str)
 
     std::size_t pos;
 
-    if (str.size() >= 1 && str[0] == '\'') {
+    if (!str.empty() && str[0] == '\'') {
         narrow = true;
         pos = 1;
     } else if (str.size() >= 2 && str[0] == 'u' && str[1] == '\'') {
@@ -2391,7 +2793,7 @@ long long simplecpp::characterLiteralToLL(const std::string& str)
 
         if (str[pos] == '\\') {
             pos++;
-            char escape = str[pos++];
+            const char escape = str[pos++];
 
             if (pos >= str.size())
                 throw std::runtime_error("unexpected end of character literal");
@@ -2458,7 +2860,7 @@ long long simplecpp::characterLiteralToLL(const std::string& str)
             case 'u':
             case 'U': {
                 // universal character names have exactly 4 or 8 digits
-                std::size_t ndigits = (escape == 'u' ? 4 : 8);
+                const std::size_t ndigits = (escape == 'u' ? 4 : 8);
                 value = stringToULLbounded(str, pos, 16, ndigits, ndigits);
 
                 // UTF-8 encodes code points above 0x7f in multiple code units
@@ -2486,7 +2888,7 @@ long long simplecpp::characterLiteralToLL(const std::string& str)
                 int additional_bytes;
                 if (value >= 0xf5)  // higher values would result in code points above 0x10ffff
                     throw std::runtime_error("assumed UTF-8 encoded source, but sequence is invalid");
-                else if (value >= 0xf0)
+                if (value >= 0xf0)
                     additional_bytes = 3;
                 else if (value >= 0xe0)
                     additional_bytes = 2;
@@ -2501,7 +2903,7 @@ long long simplecpp::characterLiteralToLL(const std::string& str)
                     if (pos + 1 >= str.size())
                         throw std::runtime_error("assumed UTF-8 encoded source, but character literal ends unexpectedly");
 
-                    unsigned char c = str[pos++];
+                    const unsigned char c = str[pos++];
 
                     if (((c >> 6) != 2)    // ensure c has form 0xb10xxxxxx
                         || (!value && additional_bytes == 1 && c < 0xa0)    // overlong 3-bytes encoding
@@ -2553,14 +2955,26 @@ static void simplifyNumbers(simplecpp::TokenList &expr)
             continue;
         if (tok->str().compare(0,2,"0x") == 0)
             tok->setstr(toString(stringToULL(tok->str())));
-        else if (!tok->number && tok->str().find('\'') != tok->str().npos)
+        else if (!tok->number && tok->str().find('\'') != std::string::npos)
             tok->setstr(toString(simplecpp::characterLiteralToLL(tok->str())));
     }
 }
 
-static long long evaluate(simplecpp::TokenList &expr, const std::map<std::string, std::size_t> &sizeOfType)
+static void simplifyComments(simplecpp::TokenList &expr)
 {
+    for (simplecpp::Token *tok = expr.front(); tok;) {
+        simplecpp::Token * const d = tok;
+        tok = tok->next;
+        if (d->comment)
+            expr.deleteToken(d);
+    }
+}
+
+static long long evaluate(simplecpp::TokenList &expr, const simplecpp::DUI &dui, const std::map<std::string, std::size_t> &sizeOfType)
+{
+    simplifyComments(expr);
     simplifySizeof(expr, sizeOfType);
+    simplifyHasInclude(expr, dui);
     simplifyName(expr);
     simplifyNumbers(expr);
     expr.constFold();
@@ -2581,51 +2995,46 @@ static const simplecpp::Token *gotoNextLine(const simplecpp::Token *tok)
 
 class NonExistingFilesCache {
 public:
-    NonExistingFilesCache() {
-        InitializeCriticalSection(&m_criticalSection);
-    }
-
-    ~NonExistingFilesCache() {
-        DeleteCriticalSection(&m_criticalSection);
-    }
+    NonExistingFilesCache() {}
 
     bool contains(const std::string& path) {
-        ScopedLock lock(m_criticalSection);
+        MyLock<MyMutex> lock(m_mutex);
         return (m_pathSet.find(path) != m_pathSet.end());
     }
 
     void add(const std::string& path) {
-        ScopedLock lock(m_criticalSection);
+        MyLock<MyMutex> lock(m_mutex);
         m_pathSet.insert(path);
+    }
+
+    void clear() {
+        MyLock<MyMutex> lock(m_mutex);
+        m_pathSet.clear();
     }
 
 private:
     std::set<std::string> m_pathSet;
-    CRITICAL_SECTION m_criticalSection;
+    MyMutex m_mutex;
 };
 
 static NonExistingFilesCache nonExistingFilesCache;
 
 #endif
 
-static std::string _openHeader(std::ifstream &f, const std::string &path)
+static std::string openHeader(std::ifstream &f, const std::string &path)
 {
-#ifdef SIMPLECPP_WINDOWS
     std::string simplePath = simplecpp::simplifyPath(path);
+#ifdef SIMPLECPP_WINDOWS
     if (nonExistingFilesCache.contains(simplePath))
         return "";  // file is known not to exist, skip expensive file open call
-
+#endif
     f.open(simplePath.c_str());
     if (f.is_open())
         return simplePath;
-    else {
-        nonExistingFilesCache.add(simplePath);
-        return "";
-    }
-#else
-    f.open(path.c_str());
-    return f.is_open() ? simplecpp::simplifyPath(path) : "";
+#ifdef SIMPLECPP_WINDOWS
+    nonExistingFilesCache.add(simplePath);
 #endif
+    return "";
 }
 
 static std::string getRelativeFileName(const std::string &sourcefile, const std::string &header)
@@ -2637,7 +3046,7 @@ static std::string getRelativeFileName(const std::string &sourcefile, const std:
 
 static std::string openHeaderRelative(std::ifstream &f, const std::string &sourcefile, const std::string &header)
 {
-    return _openHeader(f, getRelativeFileName(sourcefile, header));
+    return openHeader(f, getRelativeFileName(sourcefile, header));
 }
 
 static std::string getIncludePathFileName(const std::string &includePath, const std::string &header)
@@ -2651,7 +3060,7 @@ static std::string getIncludePathFileName(const std::string &includePath, const 
 static std::string openHeaderIncludePath(std::ifstream &f, const simplecpp::DUI &dui, const std::string &header)
 {
     for (std::list<std::string>::const_iterator it = dui.includePaths.begin(); it != dui.includePaths.end(); ++it) {
-        std::string simplePath = _openHeader(f, getIncludePathFileName(*it, header));
+        std::string simplePath = openHeader(f, getIncludePathFileName(*it, header));
         if (!simplePath.empty())
             return simplePath;
     }
@@ -2661,17 +3070,19 @@ static std::string openHeaderIncludePath(std::ifstream &f, const simplecpp::DUI 
 static std::string openHeader(std::ifstream &f, const simplecpp::DUI &dui, const std::string &sourcefile, const std::string &header, bool systemheader)
 {
     if (isAbsolutePath(header))
-        return _openHeader(f, header);
+        return openHeader(f, header);
 
     std::string ret;
 
     if (systemheader) {
         ret = openHeaderIncludePath(f, dui, header);
-        return ret.empty() ? openHeaderRelative(f, sourcefile, header) : ret;
+        return ret;
     }
 
     ret = openHeaderRelative(f, sourcefile, header);
-    return ret.empty() ? openHeaderIncludePath(f, dui, header) : ret;
+    if (ret.empty())
+        return openHeaderIncludePath(f, dui, header);
+    return ret;
 }
 
 static std::string getFileName(const std::map<std::string, simplecpp::TokenList *> &filedata, const std::string &sourcefile, const std::string &header, const simplecpp::DUI &dui, bool systemheader)
@@ -2683,9 +3094,11 @@ static std::string getFileName(const std::map<std::string, simplecpp::TokenList 
         return (filedata.find(header) != filedata.end()) ? simplecpp::simplifyPath(header) : "";
     }
 
-    const std::string relativeFilename = getRelativeFileName(sourcefile, header);
-    if (!systemheader && filedata.find(relativeFilename) != filedata.end())
-        return relativeFilename;
+    if (!systemheader) {
+        const std::string relativeFilename = getRelativeFileName(sourcefile, header);
+        if (filedata.find(relativeFilename) != filedata.end())
+            return relativeFilename;
+    }
 
     for (std::list<std::string>::const_iterator it = dui.includePaths.begin(); it != dui.includePaths.end(); ++it) {
         std::string s = simplecpp::simplifyPath(getIncludePathFileName(*it, header));
@@ -2693,8 +3106,8 @@ static std::string getFileName(const std::map<std::string, simplecpp::TokenList 
             return s;
     }
 
-    if (filedata.find(relativeFilename) != filedata.end())
-        return relativeFilename;
+    if (systemheader && filedata.find(header) != filedata.end())
+        return header;
 
     return "";
 }
@@ -2704,8 +3117,13 @@ static bool hasFile(const std::map<std::string, simplecpp::TokenList *> &filedat
     return !getFileName(filedata, sourcefile, header, dui, systemheader).empty();
 }
 
-std::map<std::string, simplecpp::TokenList*> simplecpp::load(const simplecpp::TokenList &rawtokens, std::vector<std::string> &fileNumbers, const simplecpp::DUI &dui, simplecpp::OutputList *outputList)
+std::map<std::string, simplecpp::TokenList*> simplecpp::load(const simplecpp::TokenList &rawtokens, std::vector<std::string> &filenames, const simplecpp::DUI &dui, simplecpp::OutputList *outputList)
 {
+#ifdef SIMPLECPP_WINDOWS
+    if (dui.clearIncludeCache)
+        nonExistingFilesCache.clear();
+#endif
+
     std::map<std::string, simplecpp::TokenList*> ret;
 
     std::list<const Token *> filelist;
@@ -2720,27 +3138,30 @@ std::map<std::string, simplecpp::TokenList*> simplecpp::load(const simplecpp::To
         std::ifstream fin(filename.c_str());
         if (!fin.is_open()) {
             if (outputList) {
-                simplecpp::Output err(fileNumbers);
+                simplecpp::Output err(filenames);
                 err.type = simplecpp::Output::EXPLICIT_INCLUDE_NOT_FOUND;
-                err.location = Location(fileNumbers);
+                err.location = Location(filenames);
                 err.msg = "Can not open include file '" + filename + "' that is explicitly included.";
                 outputList->push_back(err);
             }
             continue;
         }
+        fin.close();
 
-        TokenList *tokenlist = new TokenList(fin, fileNumbers, filename, outputList);
+        TokenList *tokenlist = new TokenList(filename, filenames, outputList);
         if (!tokenlist->front()) {
             delete tokenlist;
             continue;
         }
 
+        if (dui.removeComments)
+            tokenlist->removeComments();
         ret[filename] = tokenlist;
         filelist.push_back(tokenlist->front());
     }
 
-    for (const Token *rawtok = rawtokens.cfront(); rawtok || !filelist.empty(); rawtok = rawtok ? rawtok->next : NULL) {
-        if (rawtok == NULL) {
+    for (const Token *rawtok = rawtokens.cfront(); rawtok || !filelist.empty(); rawtok = rawtok ? rawtok->next : nullptr) {
+        if (rawtok == nullptr) {
             rawtok = filelist.back();
             filelist.pop_back();
         }
@@ -2754,11 +3175,11 @@ std::map<std::string, simplecpp::TokenList*> simplecpp::load(const simplecpp::To
 
         const std::string &sourcefile = rawtok->location.file();
 
-        const Token *htok = rawtok->nextSkipComments();
+        const Token * const htok = rawtok->nextSkipComments();
         if (!sameline(rawtok, htok))
             continue;
 
-        bool systemheader = (htok->str()[0] == '<');
+        const bool systemheader = (htok->str()[0] == '<');
         const std::string header(realFilename(htok->str().substr(1U, htok->str().size() - 2U)));
         if (hasFile(ret, sourcefile, header, dui, systemheader))
             continue;
@@ -2767,8 +3188,11 @@ std::map<std::string, simplecpp::TokenList*> simplecpp::load(const simplecpp::To
         const std::string header2 = openHeader(f,dui,sourcefile,header,systemheader);
         if (!f.is_open())
             continue;
+        f.close();
 
-        TokenList *tokens = new TokenList(f, fileNumbers, header2, outputList);
+        TokenList *tokens = new TokenList(header2, filenames, outputList);
+        if (dui.removeComments)
+            tokens->removeComments();
         ret[header2] = tokens;
         if (tokens->front())
             filelist.push_back(tokens->front());
@@ -2777,10 +3201,10 @@ std::map<std::string, simplecpp::TokenList*> simplecpp::load(const simplecpp::To
     return ret;
 }
 
-static bool preprocessToken(simplecpp::TokenList &output, const simplecpp::Token **tok1, std::map<std::string, simplecpp::Macro> &macros, std::vector<std::string> &files, simplecpp::OutputList *outputList)
+static bool preprocessToken(simplecpp::TokenList &output, const simplecpp::Token **tok1, simplecpp::MacroMap &macros, std::vector<std::string> &files, simplecpp::OutputList *outputList)
 {
-    const simplecpp::Token *tok = *tok1;
-    const std::map<std::string,simplecpp::Macro>::const_iterator it = macros.find(tok->str());
+    const simplecpp::Token * const tok = *tok1;
+    const simplecpp::MacroMap::const_iterator it = macros.find(tok->str());
     if (it != macros.end()) {
         simplecpp::TokenList value(files);
         try {
@@ -2804,8 +3228,39 @@ static bool preprocessToken(simplecpp::TokenList &output, const simplecpp::Token
     return true;
 }
 
+static void getLocaltime(struct tm &ltime)
+{
+    time_t t;
+    time(&t);
+#ifndef _WIN32
+    // NOLINTNEXTLINE(misc-include-cleaner) - false positive
+    localtime_r(&t, &ltime);
+#else
+    localtime_s(&ltime, &t);
+#endif
+}
+
+static std::string getDateDefine(const struct tm *timep)
+{
+    char buf[] = "??? ?? ????";
+    strftime(buf, sizeof(buf), "%b %d %Y", timep);
+    return std::string("\"").append(buf).append("\"");
+}
+
+static std::string getTimeDefine(const struct tm *timep)
+{
+    char buf[] = "??:??:??";
+    strftime(buf, sizeof(buf), "%T", timep);
+    return std::string("\"").append(buf).append("\"");
+}
+
 void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenList &rawtokens, std::vector<std::string> &files, std::map<std::string, simplecpp::TokenList *> &filedata, const simplecpp::DUI &dui, simplecpp::OutputList *outputList, std::list<simplecpp::MacroUsage> *macroUsage, std::list<simplecpp::IfCond> *ifCond)
 {
+#ifdef SIMPLECPP_WINDOWS
+    if (dui.clearIncludeCache)
+        nonExistingFilesCache.clear();
+#endif
+
     std::map<std::string, std::size_t> sizeOfType(rawtokens.sizeOfType);
     sizeOfType.insert(std::make_pair("char", sizeof(char)));
     sizeOfType.insert(std::make_pair("short", sizeof(short)));
@@ -2828,8 +3283,11 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
     sizeOfType.insert(std::make_pair("double *", sizeof(double *)));
     sizeOfType.insert(std::make_pair("long double *", sizeof(long double *)));
 
-    const bool hasInclude = (dui.std.size() == 5 && dui.std.compare(0,3,"c++") == 0 && dui.std >= "c++17");
-    std::map<TokenString, Macro> macros;
+    // use a dummy vector for the macros because as this is not part of the file and would add an empty entry - e.g. /usr/include/poll.h
+    std::vector<std::string> dummy;
+
+    const bool hasInclude = isCpp17OrLater(dui);
+    MacroMap macros;
     for (std::list<std::string>::const_iterator it = dui.defines.begin(); it != dui.defines.end(); ++it) {
         const std::string &macrostr = *it;
         const std::string::size_type eq = macrostr.find('=');
@@ -2839,29 +3297,35 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
             continue;
         const std::string lhs(macrostr.substr(0,eq));
         const std::string rhs(eq==std::string::npos ? std::string("1") : macrostr.substr(eq+1));
-        const Macro macro(lhs, rhs, files);
+        const Macro macro(lhs, rhs, dummy);
         macros.insert(std::pair<TokenString,Macro>(macro.name(), macro));
     }
 
-    macros.insert(std::make_pair("__FILE__", Macro("__FILE__", "__FILE__", files)));
-    macros.insert(std::make_pair("__LINE__", Macro("__LINE__", "__LINE__", files)));
-    macros.insert(std::make_pair("__COUNTER__", Macro("__COUNTER__", "__COUNTER__", files)));
+    macros.insert(std::make_pair("__FILE__", Macro("__FILE__", "__FILE__", dummy)));
+    macros.insert(std::make_pair("__LINE__", Macro("__LINE__", "__LINE__", dummy)));
+    macros.insert(std::make_pair("__COUNTER__", Macro("__COUNTER__", "__COUNTER__", dummy)));
+    struct tm ltime = {};
+    getLocaltime(ltime);
+    macros.insert(std::make_pair("__DATE__", Macro("__DATE__", getDateDefine(&ltime), dummy)));
+    macros.insert(std::make_pair("__TIME__", Macro("__TIME__", getTimeDefine(&ltime), dummy)));
 
-    if (dui.std == "c++11")
-        macros.insert(std::make_pair("__cplusplus", Macro("__cplusplus", "201103L", files)));
-    else if (dui.std == "c++14")
-        macros.insert(std::make_pair("__cplusplus", Macro("__cplusplus", "201402L", files)));
-    else if (dui.std == "c++17")
-        macros.insert(std::make_pair("__cplusplus", Macro("__cplusplus", "201703L", files)));
-    else if (dui.std == "c++20")
-        macros.insert(std::make_pair("__cplusplus", Macro("__cplusplus", "202002L", files)));
+    if (!dui.std.empty()) {
+        std::string std_def = simplecpp::getCStdString(dui.std);
+        if (!std_def.empty()) {
+            macros.insert(std::make_pair("__STDC_VERSION__", Macro("__STDC_VERSION__", std_def, dummy)));
+        } else {
+            std_def = simplecpp::getCppStdString(dui.std);
+            if (!std_def.empty())
+                macros.insert(std::make_pair("__cplusplus", Macro("__cplusplus", std_def, dummy)));
+        }
+    }
 
-    // TRUE => code in current #if block should be kept
-    // ELSE_IS_TRUE => code in current #if block should be dropped. the code in the #else should be kept.
-    // ALWAYS_FALSE => drop all code in #if and #else
-    enum IfState { TRUE, ELSE_IS_TRUE, ALWAYS_FALSE };
+    // True => code in current #if block should be kept
+    // ElseIsTrue => code in current #if block should be dropped. the code in the #else should be kept.
+    // AlwaysFalse => drop all code in #if and #else
+    enum IfState { True, ElseIsTrue, AlwaysFalse };
     std::stack<int> ifstates;
-    ifstates.push(TRUE);
+    ifstates.push(True);
 
     std::stack<const Token *> includetokenstack;
 
@@ -2874,14 +3338,16 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
             includetokenstack.push(f->second->cfront());
     }
 
-    for (const Token *rawtok = NULL; rawtok || !includetokenstack.empty();) {
-        if (rawtok == NULL) {
+    std::map<std::string, std::list<Location> > maybeUsedMacros;
+
+    for (const Token *rawtok = nullptr; rawtok || !includetokenstack.empty();) {
+        if (rawtok == nullptr) {
             rawtok = includetokenstack.top();
             includetokenstack.pop();
             continue;
         }
 
-        if (rawtok->op == '#' && !sameline(rawtok->previous, rawtok)) {
+        if (rawtok->op == '#' && !sameline(rawtok->previousSkipComments(), rawtok)) {
             if (!sameline(rawtok, rawtok->next)) {
                 rawtok = rawtok->next;
                 continue;
@@ -2904,7 +3370,7 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                 return;
             }
 
-            if (ifstates.top() == TRUE && (rawtok->str() == ERROR || rawtok->str() == WARNING)) {
+            if (ifstates.top() == True && (rawtok->str() == ERROR || rawtok->str() == WARNING)) {
                 if (outputList) {
                     simplecpp::Output err(rawtok->location.files);
                     err.type = rawtok->str() == ERROR ? Output::ERROR : Output::WARNING;
@@ -2924,12 +3390,12 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
             }
 
             if (rawtok->str() == DEFINE) {
-                if (ifstates.top() != TRUE)
+                if (ifstates.top() != True)
                     continue;
                 try {
                     const Macro &macro = Macro(rawtok->previous, files);
                     if (dui.undefined.find(macro.name()) == dui.undefined.end()) {
-                        std::map<TokenString, Macro>::iterator it = macros.find(macro.name());
+                        const MacroMap::iterator it = macros.find(macro.name());
                         if (it == macros.end())
                             macros.insert(std::pair<TokenString, Macro>(macro.name(), macro));
                         else
@@ -2946,7 +3412,7 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                     output.clear();
                     return;
                 }
-            } else if (ifstates.top() == TRUE && rawtok->str() == INCLUDE) {
+            } else if (ifstates.top() == True && rawtok->str() == INCLUDE) {
                 TokenList inc1(files);
                 for (const Token *inctok = rawtok->next; sameline(rawtok,inctok); inctok = inctok->next) {
                     if (!inctok->comment)
@@ -2987,9 +3453,9 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                     return;
                 }
 
-                const Token *inctok = inc2.cfront();
+                const Token * const inctok = inc2.cfront();
 
-                const bool systemheader = (inctok->op == '<');
+                const bool systemheader = (inctok->str()[0] == '<');
                 const std::string header(realFilename(inctok->str().substr(1U, inctok->str().size() - 2U)));
                 std::string header2 = getFileName(filedata, rawtok->location.file(), header, dui, systemheader);
                 if (header2.empty()) {
@@ -2997,7 +3463,9 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                     std::ifstream f;
                     header2 = openHeader(f, dui, rawtok->location.file(), header, systemheader);
                     if (f.is_open()) {
-                        TokenList *tokens = new TokenList(f, files, header2, outputList);
+                        TokenList * const tokens = new TokenList(f, files, header2, outputList);
+                        if (dui.removeComments)
+                            tokens->removeComments();
                         filedata[header2] = tokens;
                     }
                 }
@@ -3019,8 +3487,8 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                     }
                 } else if (pragmaOnce.find(header2) == pragmaOnce.end()) {
                     includetokenstack.push(gotoNextLine(rawtok));
-                    const TokenList *includetokens = filedata.find(header2)->second;
-                    rawtok = includetokens ? includetokens->cfront() : NULL;
+                    const TokenList * const includetokens = filedata.find(header2)->second;
+                    rawtok = includetokens ? includetokens->cfront() : nullptr;
                     continue;
                 }
             } else if (rawtok->str() == IF || rawtok->str() == IFDEF || rawtok->str() == IFNDEF || rawtok->str() == ELIF) {
@@ -3037,13 +3505,15 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                 }
 
                 bool conditionIsTrue;
-                if (ifstates.top() == ALWAYS_FALSE || (ifstates.top() == ELSE_IS_TRUE && rawtok->str() != ELIF))
+                if (ifstates.top() == AlwaysFalse || (ifstates.top() == ElseIsTrue && rawtok->str() != ELIF))
                     conditionIsTrue = false;
-                else if (rawtok->str() == IFDEF)
+                else if (rawtok->str() == IFDEF) {
                     conditionIsTrue = (macros.find(rawtok->next->str()) != macros.end() || (hasInclude && rawtok->next->str() == HAS_INCLUDE));
-                else if (rawtok->str() == IFNDEF)
+                    maybeUsedMacros[rawtok->next->str()].push_back(rawtok->next->location);
+                } else if (rawtok->str() == IFNDEF) {
                     conditionIsTrue = (macros.find(rawtok->next->str()) == macros.end() && !(hasInclude && rawtok->next->str() == HAS_INCLUDE));
-                else { /*if (rawtok->str() == IF || rawtok->str() == ELIF)*/
+                    maybeUsedMacros[rawtok->next->str()].push_back(rawtok->next->location);
+                } else { /*if (rawtok->str() == IF || rawtok->str() == ELIF)*/
                     TokenList expr(files);
                     for (const Token *tok = rawtok->next; tok && tok->location.sameline(rawtok->location); tok = tok->next) {
                         if (!tok->name) {
@@ -3056,6 +3526,7 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                             const bool par = (tok && tok->op == '(');
                             if (par)
                                 tok = tok->next;
+                            maybeUsedMacros[rawtok->next->str()].push_back(rawtok->next->location);
                             if (tok) {
                                 if (macros.find(tok->str()) != macros.end())
                                     expr.push_back(new Token("1", tok->location));
@@ -3065,7 +3536,7 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                                     expr.push_back(new Token("0", tok->location));
                             }
                             if (par)
-                                tok = tok ? tok->next : NULL;
+                                tok = tok ? tok->next : nullptr;
                             if (!tok || !sameline(rawtok,tok) || (par && tok->op != ')')) {
                                 if (outputList) {
                                     Output out(rawtok->location.files);
@@ -3085,17 +3556,31 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                             const bool par = (tok && tok->op == '(');
                             if (par)
                                 tok = tok->next;
+                            bool closingAngularBracket = false;
                             if (tok) {
                                 const std::string &sourcefile = rawtok->location.file();
-                                const bool systemheader = (tok->str()[0] == '<');
-                                const std::string header(realFilename(tok->str().substr(1U, tok->str().size() - 2U)));
+                                const bool systemheader = (tok && tok->op == '<');
+                                std::string header;
+
+                                if (systemheader) {
+                                    while ((tok = tok->next) && tok->op != '>')
+                                        header += tok->str();
+                                    // cppcheck-suppress selfAssignment - platform-dependent implementation
+                                    header = realFilename(header);
+                                    if (tok && tok->op == '>')
+                                        closingAngularBracket = true;
+                                }
+                                else {
+                                    header = realFilename(tok->str().substr(1U, tok->str().size() - 2U));
+                                    closingAngularBracket = true;
+                                }
                                 std::ifstream f;
                                 const std::string header2 = openHeader(f,dui,sourcefile,header,systemheader);
                                 expr.push_back(new Token(header2.empty() ? "0" : "1", tok->location));
                             }
                             if (par)
-                                tok = tok ? tok->next : NULL;
-                            if (!tok || !sameline(rawtok,tok) || (par && tok->op != ')')) {
+                                tok = tok ? tok->next : nullptr;
+                            if (!tok || !sameline(rawtok,tok) || (par && tok->op != ')') || (!closingAngularBracket)) {
                                 if (outputList) {
                                     Output out(rawtok->location.files);
                                     out.type = Output::SYNTAX_ERROR;
@@ -3108,6 +3593,8 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                             }
                             continue;
                         }
+
+                        maybeUsedMacros[rawtok->next->str()].push_back(rawtok->next->location);
 
                         const Token *tmp = tok;
                         if (!preprocessToken(expr, &tmp, macros, files, outputList)) {
@@ -3123,11 +3610,11 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
                             std::string E;
                             for (const simplecpp::Token *tok = expr.cfront(); tok; tok = tok->next)
                                 E += (E.empty() ? "" : " ") + tok->str();
-                            const long long result = evaluate(expr, sizeOfType);
+                            const long long result = evaluate(expr, dui, sizeOfType);
                             conditionIsTrue = (result != 0);
                             ifCond->push_back(IfCond(rawtok->location, E, result));
                         } else {
-                            const long long result = evaluate(expr, sizeOfType);
+                            const long long result = evaluate(expr, dui, sizeOfType);
                             conditionIsTrue = (result != 0);
                         }
                     } catch (const std::exception &e) {
@@ -3147,35 +3634,35 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
 
                 if (rawtok->str() != ELIF) {
                     // push a new ifstate..
-                    if (ifstates.top() != TRUE)
-                        ifstates.push(ALWAYS_FALSE);
+                    if (ifstates.top() != True)
+                        ifstates.push(AlwaysFalse);
                     else
-                        ifstates.push(conditionIsTrue ? TRUE : ELSE_IS_TRUE);
-                } else if (ifstates.top() == TRUE) {
-                    ifstates.top() = ALWAYS_FALSE;
-                } else if (ifstates.top() == ELSE_IS_TRUE && conditionIsTrue) {
-                    ifstates.top() = TRUE;
+                        ifstates.push(conditionIsTrue ? True : ElseIsTrue);
+                } else if (ifstates.top() == True) {
+                    ifstates.top() = AlwaysFalse;
+                } else if (ifstates.top() == ElseIsTrue && conditionIsTrue) {
+                    ifstates.top() = True;
                 }
             } else if (rawtok->str() == ELSE) {
-                ifstates.top() = (ifstates.top() == ELSE_IS_TRUE) ? TRUE : ALWAYS_FALSE;
+                ifstates.top() = (ifstates.top() == ElseIsTrue) ? True : AlwaysFalse;
             } else if (rawtok->str() == ENDIF) {
                 ifstates.pop();
             } else if (rawtok->str() == UNDEF) {
-                if (ifstates.top() == TRUE) {
+                if (ifstates.top() == True) {
                     const Token *tok = rawtok->next;
                     while (sameline(rawtok,tok) && tok->comment)
                         tok = tok->next;
                     if (sameline(rawtok, tok))
                         macros.erase(tok->str());
                 }
-            } else if (ifstates.top() == TRUE && rawtok->str() == PRAGMA && rawtok->next && rawtok->next->str() == ONCE && sameline(rawtok,rawtok->next)) {
+            } else if (ifstates.top() == True && rawtok->str() == PRAGMA && rawtok->next && rawtok->next->str() == ONCE && sameline(rawtok,rawtok->next)) {
                 pragmaOnce.insert(rawtok->location.file());
             }
             rawtok = gotoNextLine(rawtok);
             continue;
         }
 
-        if (ifstates.top() != TRUE) {
+        if (ifstates.top() != True) {
             // drop code
             rawtok = gotoNextLine(rawtok);
             continue;
@@ -3216,9 +3703,11 @@ void simplecpp::preprocess(simplecpp::TokenList &output, const simplecpp::TokenL
     }
 
     if (macroUsage) {
-        for (std::map<TokenString, simplecpp::Macro>::const_iterator macroIt = macros.begin(); macroIt != macros.end(); ++macroIt) {
+        for (simplecpp::MacroMap::const_iterator macroIt = macros.begin(); macroIt != macros.end(); ++macroIt) {
             const Macro &macro = macroIt->second;
-            const std::list<Location> &usage = macro.usage();
+            std::list<Location> usage = macro.usage();
+            const std::list<Location>& temp = maybeUsedMacros[macro.name()];
+            usage.insert(usage.end(), temp.begin(), temp.end());
             for (std::list<Location>::const_iterator usageIt = usage.begin(); usageIt != usage.end(); ++usageIt) {
                 MacroUsage mu(usageIt->files, macro.valueDefinedInCode());
                 mu.macroName = macro.name();
@@ -3236,3 +3725,57 @@ void simplecpp::cleanup(std::map<std::string, TokenList*> &filedata)
         delete it->second;
     filedata.clear();
 }
+
+std::string simplecpp::getCStdString(const std::string &std)
+{
+    if (std == "c90" || std == "c89" || std == "iso9899:1990" || std == "iso9899:199409" || std == "gnu90" || std == "gnu89") {
+        // __STDC_VERSION__ is not set for C90 although the macro was added in the 1994 amendments
+        return "";
+    }
+    if (std == "c99" || std == "c9x" || std == "iso9899:1999" || std == "iso9899:199x" || std == "gnu99"|| std == "gnu9x")
+        return "199901L";
+    if (std == "c11" || std == "c1x" || std == "iso9899:2011" || std == "gnu11" || std == "gnu1x")
+        return "201112L";
+    if (std == "c17" || std == "c18" || std == "iso9899:2017" || std == "iso9899:2018" || std == "gnu17"|| std == "gnu18")
+        return "201710L";
+    if (std == "c23" || std == "gnu23" || std == "c2x" || std == "gnu2x") {
+        // supported by GCC 9+ and Clang 9+
+        // Clang 9, 10, 11, 12, 13 return "201710L"
+        // Clang 14, 15, 16, 17 return "202000L"
+        // Clang 9, 10, 11, 12, 13, 14, 15, 16, 17 do not support "c23" and "gnu23"
+        return "202311L";
+    }
+    return "";
+}
+
+std::string simplecpp::getCppStdString(const std::string &std)
+{
+    if (std == "c++98" || std == "c++03" || std == "gnu++98" || std == "gnu++03")
+        return "199711L";
+    if (std == "c++11" || std == "gnu++11" || std == "c++0x" || std == "gnu++0x")
+        return "201103L";
+    if (std == "c++14" || std == "c++1y" || std == "gnu++14" || std == "gnu++1y")
+        return "201402L";
+    if (std == "c++17" || std == "c++1z" || std == "gnu++17" || std == "gnu++1z")
+        return "201703L";
+    if (std == "c++20" || std == "c++2a" || std == "gnu++20" || std == "gnu++2a") {
+        // GCC 10 returns "201703L" - correct in 11+
+        return "202002L";
+    }
+    if (std == "c++23" || std == "c++2b" || std == "gnu++23" || std == "gnu++2b") {
+        // supported by GCC 11+ and Clang 12+
+        // GCC 11, 12, 13 return "202100L"
+        // Clang 12, 13, 14, 15, 16 do not support "c++23" and "gnu++23" and return "202101L"
+        // Clang 17, 18 return "202302L"
+        return "202302L";
+    }
+    if (std == "c++26" || std == "c++2c" || std == "gnu++26" || std == "gnu++2c") {
+        // supported by Clang 17+
+        return "202400L";
+    }
+    return "";
+}
+
+#if (__cplusplus < 201103L) && !defined(__APPLE__)
+#undef nullptr
+#endif

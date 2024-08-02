@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2018 Cppcheck team.
+ * Copyright (C) 2007-2022 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,11 +35,11 @@ public:
 
     /**
      * The constructor.
-     * @param excludedPaths List of masks.
+     * @param paths List of masks.
      * @param caseSensitive Match the case of the characters when
      *   matching paths?
      */
-    explicit PathMatch(const std::vector<std::string> &excludedPaths, bool caseSensitive = true);
+    explicit PathMatch(std::vector<std::string> paths, bool caseSensitive = true);
 
     /**
      * @brief Match path against list of masks.
@@ -58,7 +58,7 @@ protected:
     static std::string removeFilename(const std::string &path);
 
 private:
-    std::vector<std::string> mExcludedPaths;
+    std::vector<std::string> mPaths;
     bool mCaseSensitive;
     std::vector<std::string> mWorkingDirectory;
 };

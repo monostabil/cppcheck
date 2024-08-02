@@ -1,7 +1,7 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Cppcheck - A tool for static C/C++ code analysis
-# Copyright (C) 2007-2019 Cppcheck team.
+# Copyright (C) 2007-2021 Cppcheck team.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -24,6 +24,77 @@ import glob
 import argparse
 import errno
 
+tokTypes = {
+    '+': ['eArithmeticalOp'],
+    '-': ['eArithmeticalOp'],
+    '*': ['eArithmeticalOp'],
+    '/': ['eArithmeticalOp'],
+    '%': ['eArithmeticalOp'],
+    '>>': ['eArithmeticalOp'],
+    '<<': ['eArithmeticalOp'],
+    '=': ['eAssignmentOp'],
+    '+=': ['eAssignmentOp'],
+    '-=': ['eAssignmentOp'],
+    '*=': ['eAssignmentOp'],
+    '/=': ['eAssignmentOp'],
+    '%=': ['eAssignmentOp'],
+    '&=': ['eAssignmentOp'],
+    '|=': ['eAssignmentOp'],
+    '^=': ['eAssignmentOp'],
+    '&': ['eBitOp'],
+    '^': ['eBitOp'],
+    '~': ['eBitOp'],
+    'true': ['eBoolean'],
+    'false': ['eBoolean'],
+    '{': ['eBracket'],
+    '}': ['eBracket'],
+    '<': ['eBracket', 'eComparisonOp'],
+    '>': ['eBracket', 'eComparisonOp'],
+    '==': ['eComparisonOp'],
+    '!=': ['eComparisonOp'],
+    '<=': ['eComparisonOp'],
+    '>=': ['eComparisonOp'],
+    '<=>': ['eComparisonOp'],
+    '...': ['eEllipsis'],
+    ',': ['eExtendedOp'],
+    '?': ['eExtendedOp'],
+    ':': ['eExtendedOp'],
+    '(': ['eExtendedOp'],
+    ')': ['eExtendedOp'],
+    '[': ['eExtendedOp', 'eLambda'],
+    ']': ['eExtendedOp', 'eLambda'],
+    '++': ['eIncDecOp'],
+    '--': ['eIncDecOp'],
+    'asm': ['eKeyword'],
+    'auto': ['eKeyword', 'eType'],
+    'break': ['eKeyword'],
+    'case': ['eKeyword'],
+    'const': ['eKeyword'],
+    'continue': ['eKeyword'],
+    'default': ['eKeyword'],
+    'do': ['eKeyword'],
+    'else': ['eKeyword'],
+    'enum': ['eKeyword'],
+    'extern': ['eKeyword'],
+    'for': ['eKeyword'],
+    'goto': ['eKeyword'],
+    'if': ['eKeyword'],
+    'inline': ['eKeyword'],
+    'register': ['eKeyword'],
+    'restrict': ['eKeyword'],
+    'return': ['eKeyword'],
+    'sizeof': ['eKeyword'],
+    'static': ['eKeyword'],
+    'struct': ['eKeyword'],
+    'switch': ['eKeyword'],
+    'typedef': ['eKeyword'],
+    'union': ['eKeyword'],
+    'volatile': ['eKeyword'],
+    'while': ['eKeyword'],
+    'void': ['eKeyword', 'eType'],
+    '&&': ['eLogicalOp'],
+    '!': ['eLogicalOp']
+}
 
 class MatchCompiler:
 
@@ -108,7 +179,7 @@ class MatchCompiler:
         elif tok == '%str%':
             return '(tok->tokType() == Token::eString)'
         elif tok == '%type%':
-            return '(tok->isName() && tok->varId() == 0U && (tok->str() != "delete" || !tok->isKeyword()))'
+            return '(tok->isName() && tok->varId() == 0U)'
         elif tok == '%name%':
             return 'tok->isName()'
         elif tok == '%var%':
@@ -117,7 +188,9 @@ class MatchCompiler:
             return '(tok->isName() && tok->varId() == varid)'
         elif (len(tok) > 2) and (tok[0] == "%"):
             print("unhandled:" + tok)
-
+        elif tok in tokTypes:
+            cond = ' || '.join(['tok->tokType() == Token::{}'.format(tokType) for tokType in tokTypes[tok]])
+            return '(({cond}) && tok->str() == MatchCompiler::makeConstString("{tok}"))'.format(cond=cond, tok=tok)
         return (
             '(tok->str() == MatchCompiler::makeConstString("' + tok + '"))'
         )
@@ -133,7 +206,7 @@ class MatchCompiler:
                 arg2 = ', const int varid'
 
             ret = '// pattern: ' + pattern + '\n'
-            ret += 'static bool match' + \
+            ret += 'static inline bool match' + \
                 str(nr) + '(' + tokenType + '* tok' + arg2 + ') {\n'
             returnStatement = 'return false;\n'
 
@@ -217,7 +290,7 @@ class MatchCompiler:
             more_args += ', int varid'
 
         ret = '// pattern: ' + pattern + '\n'
-        ret += 'template<class T> static T * findmatch' + \
+        ret += 'template<class T> static inline T * findmatch' + \
             str(findmatchnr) + '(T * start_tok' + more_args + ') {\n'
         ret += '    for (; start_tok' + endCondition + \
             '; start_tok = start_tok->next()) {\n'
@@ -300,7 +373,7 @@ class MatchCompiler:
         if varId:
             more_args = ', const int varid'
 
-        ret = 'static bool match_verify' + \
+        ret = 'static inline bool match_verify' + \
             str(verifyNumber) + '(const Token *tok' + more_args + ') {\n'
 
         origMatchName = 'Match'
@@ -384,6 +457,10 @@ class MatchCompiler:
             is_simplematch = func == 'simpleMatch'
             pattern_start = 0
             while True:
+                # skip comments
+                if line.strip().startswith('//'):
+                    break
+
                 pos1 = line.find('Token::' + func + '(', pattern_start)
                 if pos1 == -1:
                     break
@@ -432,7 +509,7 @@ class MatchCompiler:
         if varId:
             more_args += ', const int varid'
 
-        ret = 'template < class T > static T * findmatch_verify' + \
+        ret = 'template < class T > static inline T * findmatch_verify' + \
             str(verifyNumber) + '(T * tok' + more_args + ') {\n'
 
         origFindMatchName = 'findmatch'
@@ -614,6 +691,8 @@ class MatchCompiler:
         for line in srclines:
             if not modified:
                 line_orig = line
+            else:
+                line_orig = None
 
             linenr += 1
             # Compile Token::Match and Token::simpleMatch
@@ -683,7 +762,7 @@ def main():
 
     # Check if we are invoked from the right place
     if not os.path.exists(lib_dir):
-        print('Directory "' + lib_dir + '"not found.')
+        print('Directory "' + lib_dir + '" not found.')
         sys.exit(-1)
 
     # Create build directory if needed

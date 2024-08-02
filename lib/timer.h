@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,31 +22,31 @@
 
 #include "config.h"
 
+#include <cstdint>
 #include <ctime>
 #include <map>
+#include <mutex>
 #include <string>
 
-enum class SHOWTIME_MODES {
-    SHOWTIME_NONE = 0,
+enum class SHOWTIME_MODES : std::uint8_t {
+    SHOWTIME_NONE,
     SHOWTIME_FILE,
+    SHOWTIME_FILE_TOTAL,
     SHOWTIME_SUMMARY,
-    SHOWTIME_TOP5
+    SHOWTIME_TOP5_SUMMARY,
+    SHOWTIME_TOP5_FILE
 };
 
 class CPPCHECKLIB TimerResultsIntf {
 public:
-    virtual ~TimerResultsIntf() {}
+    virtual ~TimerResultsIntf() = default;
 
     virtual void addResults(const std::string& str, std::clock_t clocks) = 0;
 };
 
 struct TimerResultsData {
-    std::clock_t mClocks;
-    long mNumberOfResults;
-
-    TimerResultsData()
-        : mClocks(0)
-        , mNumberOfResults(0) {}
+    std::clock_t mClocks{};
+    long mNumberOfResults{};
 
     double seconds() const {
         const double ret = (double)((unsigned long)mClocks) / (double)CLOCKS_PER_SEC;
@@ -56,30 +56,35 @@ struct TimerResultsData {
 
 class CPPCHECKLIB TimerResults : public TimerResultsIntf {
 public:
-    TimerResults() {}
+    TimerResults() = default;
 
     void showResults(SHOWTIME_MODES mode) const;
-    void addResults(const std::string& str, std::clock_t clocks) OVERRIDE;
+    void addResults(const std::string& str, std::clock_t clocks) override;
+
+    void reset();
 
 private:
-    std::map<std::string, struct TimerResultsData> mResults;
+    std::map<std::string, TimerResultsData> mResults;
+    mutable std::mutex mResultsSync;
 };
 
 class CPPCHECKLIB Timer {
 public:
-    Timer(const std::string& str, SHOWTIME_MODES showtimeMode, TimerResultsIntf* timerResults = nullptr);
+    Timer(std::string str, SHOWTIME_MODES showtimeMode, TimerResultsIntf* timerResults = nullptr);
+    Timer(bool fileTotal, std::string filename);
     ~Timer();
+
+    Timer(const Timer&) = delete;
+    Timer& operator=(const Timer&) = delete;
+
     void stop();
 
 private:
-    Timer(const Timer& other); // disallow copying
-    Timer& operator=(const Timer&); // disallow assignments
-
     const std::string mStr;
-    TimerResultsIntf* mTimerResults;
-    std::clock_t mStart;
-    const SHOWTIME_MODES mShowTimeMode;
-    bool mStopped;
+    TimerResultsIntf* mTimerResults{};
+    std::clock_t mStart = std::clock();
+    const SHOWTIME_MODES mShowTimeMode = SHOWTIME_MODES::SHOWTIME_FILE_TOTAL;
+    bool mStopped{};
 };
 //---------------------------------------------------------------------------
 #endif // timerH

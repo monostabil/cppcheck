@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,11 +20,14 @@
 #define APPLICATIONDIALOG_H
 
 #include <QDialog>
+#include <QObject>
 #include <QString>
-#include "ui_application.h"
 
 class QWidget;
 class Application;
+namespace Ui {
+    class ApplicationDialog;
+}
 
 /// @addtogroup GUI
 /// @{
@@ -48,7 +51,7 @@ public:
     ApplicationDialog(const QString &title,
                       Application &app,
                       QWidget *parent = nullptr);
-    virtual ~ApplicationDialog();
+    ~ApplicationDialog() override;
 
 protected slots:
 
@@ -66,7 +69,7 @@ protected:
      * @brief UI from the Qt designer
      *
      */
-    Ui::ApplicationDialog mUI;
+    Ui::ApplicationDialog* mUI;
 
 private:
 

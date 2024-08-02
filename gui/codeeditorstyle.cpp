@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,19 +17,29 @@
  */
 
 #include "codeeditorstyle.h"
+
 #include <QSettings>
+#include <QVariant>
 
 CodeEditorStyle::CodeEditorStyle(
-    const QColor& CtrlFGColor, const QColor& CtrlBGColor,
-    const QColor& HiLiBGColor,
-    const QColor& LnNumFGColor, const QColor& LnNumBGColor,
-    const QColor& KeyWdFGColor, const QFont::Weight& KeyWdWeight,
-    const QColor& ClsFGColor, const QFont::Weight& ClsWeight,
-    const QColor& QteFGColor, const QFont::Weight& QteWeight,
-    const QColor& CmtFGColor, const QFont::Weight& CmtWeight,
-    const QColor& SymbFGColor, const QColor& SymbBGColor,
-    const QFont::Weight& SymbWeight) :
-    mSystemTheme(false),
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor CtrlFGColor, QColor CtrlBGColor,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor HiLiBGColor,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor LnNumFGColor, QColor LnNumBGColor,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor KeyWdFGColor, QFont::Weight KeyWdWeight,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor ClsFGColor, QFont::Weight ClsWeight,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor QteFGColor, QFont::Weight QteWeight,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor CmtFGColor, QFont::Weight CmtWeight,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QColor SymbFGColor, QColor SymbBGColor,
+    // cppcheck-suppress naming-varname - TODO: fix this
+    QFont::Weight SymbWeight) :
     widgetFGColor(CtrlFGColor),
     widgetBGColor(CtrlBGColor),
     highlightBGColor(HiLiBGColor),
@@ -173,8 +183,8 @@ void CodeEditorStyle::saveSettings(QSettings *settings,
     }
 
     settings->beginGroup(SETTINGS_STYLE_GROUP);
-    bool isDefaultLight = (defaultStyleLight == theStyle);
-    bool isDefaultDark = (defaultStyleDark == theStyle);
+    const bool isDefaultLight = (defaultStyleLight == theStyle);
+    const bool isDefaultDark = (defaultStyleDark == theStyle);
     if (isDefaultLight && !isDefaultDark) {
         settings->setValue(SETTINGS_STYLE_TYPE,
                            SETTINGS_STYLE_TYPE_LIGHT);

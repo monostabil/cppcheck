@@ -1,3 +1,23 @@
-release notes for cppcheck-2.7
+Release Notes for Cppcheck 2.15
 
-Add support for container views. The `view` attribute has been added to the `<container>` library tag to specify the class is a view. The lifetime analysis has been updated to use this new attribute to find dangling lifetime containers.
+New checks:
+- suspiciousFloatingPointCast flags unnecessary floating point casts that cause loss of precision
+
+Improved checking:
+-
+
+GUI:
+-
+
+Changed interface:
+-
+
+Deprecations:
+- Support for Python 2.7 has been deprecated (it went EOL in January 2020) and will be removed in Cppcheck 2.16 - please use Python 3.x instead.
+-
+
+Other:
+- Add support for 'CLICOLOR_FORCE'/'NO_COLOR' environment variables to force/disable ANSI color output for diagnostics.
+- Added command-line option `--cpp-header-probe` (and `--no-cpp-header-probe`) to probe headers and extension-less files for Emacs marker (see https://trac.cppcheck.net/ticket/10692 for more details)
+- Add "remark comments" that can be used to generate reports with justifications for warnings
+- The whole program analysis is now being executed when "--project" is being used.

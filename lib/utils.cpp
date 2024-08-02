@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,9 +18,12 @@
 
 #include "utils.h"
 
-#include <utility>
-#include <stack>
+#include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <iterator>
+#include <stack>
+#include <utility>
 
 
 int caseInsensitiveStringCompare(const std::string &lhs, const std::string &rhs)
@@ -38,10 +41,10 @@ int caseInsensitiveStringCompare(const std::string &lhs, const std::string &rhs)
 
 bool isValidGlobPattern(const std::string& pattern)
 {
-    for (std::string::const_iterator i = pattern.begin(); i != pattern.end(); ++i) {
+    for (std::string::const_iterator i = pattern.cbegin(); i != pattern.cend(); ++i) {
         if (*i == '*' || *i == '?') {
-            std::string::const_iterator j = i + 1;
-            if (j != pattern.end() && (*j == '*' || *j == '?')) {
+            const std::string::const_iterator j = i + 1;
+            if (j != pattern.cend() && (*j == '*' || *j == '?')) {
                 return false;
             }
         }
@@ -53,7 +56,7 @@ bool matchglob(const std::string& pattern, const std::string& name)
 {
     const char* p = pattern.c_str();
     const char* n = name.c_str();
-    std::stack<std::pair<const char*, const char*>> backtrack;
+    std::stack<std::pair<const char*, const char*>, std::vector<std::pair<const char*, const char*>>> backtrack;
 
     for (;;) {
         bool matching = true;
@@ -66,7 +69,7 @@ bool matchglob(const std::string& pattern, const std::string& name)
                 }
                 if (*n != '\0') {
                     // If this isn't the last possibility, save it for later
-                    backtrack.push(std::make_pair(p, n));
+                    backtrack.emplace(p, n);
                 }
                 break;
             case '?':
@@ -111,4 +114,92 @@ bool matchglob(const std::string& pattern, const std::string& name)
         // Advance name pointer by one because the current position didn't work
         n++;
     }
+}
+
+bool matchglobs(const std::vector<std::string> &patterns, const std::string &name) {
+    return std::any_of(begin(patterns), end(patterns), [&name](const std::string &pattern) {
+        return matchglob(pattern, name);
+    });
+}
+
+void strTolower(std::string& str)
+{
+    // This wrapper exists because Sun's CC does not allow a static_cast
+    // from extern "C" int(*)(int) to int(*)(int).
+    std::transform(str.cbegin(), str.cend(), str.begin(), [](int c) {
+        return std::tolower(c);
+    });
+}
+
+std::string trim(const std::string& s, const std::string& t)
+{
+    const std::string::size_type beg = s.find_first_not_of(t);
+    if (beg == std::string::npos)
+        return "";
+    const std::string::size_type end = s.find_last_not_of(t);
+    return s.substr(beg, end - beg + 1);
+}
+
+void findAndReplace(std::string &source, const std::string &searchFor, const std::string &replaceWith)
+{
+    std::string::size_type index = 0;
+    while ((index = source.find(searchFor, index)) != std::string::npos) {
+        source.replace(index, searchFor.length(), replaceWith);
+        index += replaceWith.length();
+    }
+}
+
+std::string replaceEscapeSequences(const std::string &source) {
+    std::string result;
+    result.reserve(source.size());
+    for (std::size_t i = 0; i < source.size(); ++i) {
+        if (source[i] != '\\' || i + 1 >= source.size())
+            result += source[i];
+        else {
+            ++i;
+            if (source[i] == 'n') {
+                result += '\n';
+            } else if (source[i] == 'r') {
+                result += '\r';
+            } else if (source[i] == 't') {
+                result += '\t';
+            } else if (source[i] == 'x') {
+                std::string value = "0";
+                if (i + 1 < source.size() && std::isxdigit(source[i+1]))
+                    value += source[i++ + 1];
+                if (i + 1 < source.size() && std::isxdigit(source[i+1]))
+                    value += source[i++ + 1];
+                result += static_cast<char>(std::stoi(value, nullptr, 16));
+            } else if (source[i] == '0') {
+                std::string value = "0";
+                if (i + 1 < source.size() && source[i+1] >= '0' && source[i+1] <= '7')
+                    value += source[i++ + 1];
+                if (i + 1 < source.size() && source[i+1] >= '0' && source[i+1] <= '7')
+                    value += source[i++ + 1];
+                result += static_cast<char>(std::stoi(value, nullptr, 8));
+            } else {
+                result += source[i];
+            }
+        }
+    }
+    return result;
+}
+
+
+std::list<std::string> splitString(const std::string& str, char sep)
+{
+    if (std::strchr(str.c_str(), sep) == nullptr)
+        return {str};
+
+    std::list<std::string> l;
+    std::string p(str);
+    for (;;) {
+        const std::string::size_type pos = p.find(sep);
+        if (pos == std::string::npos)
+            break;
+        l.push_back(p.substr(0,pos));
+        p = p.substr(pos+1);
+    }
+    l.push_back(std::move(p));
+    return l;
 }

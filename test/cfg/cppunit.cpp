@@ -1,10 +1,12 @@
 // Test library configuration for cppunit.cfg
 //
 // Usage:
-// $ cppcheck --check-library --enable=information --error-exitcode=1 --suppress=missingIncludeSystem --inline-suppr test/cfg/cppunit.cpp
+// $ cppcheck --check-library --library=cppunit --enable=style,information --inconclusive --error-exitcode=1 --disable=missingInclude --inline-suppr test/cfg/cppunit.cpp
 // =>
 // No warnings about bad library configuration, unmatched suppressions, etc. exitcode=0
 //
+
+// cppcheck-suppress-file valueFlowBailout
 
 #include <cppunit/TestAssert.h>
 

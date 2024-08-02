@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,22 +16,29 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <QApplication>
-#include <QCoreApplication>
-#include <QMetaType>
-#include <QStringList>
-#include <QSettings>
-#ifdef _WIN32
-#include <QMessageBox>
-#include "aboutdialog.h"
-#else
-#include <iostream>
-#endif
 #include "cppcheck.h"
 #include "common.h"
 #include "mainwindow.h"
-#include "erroritem.h"
+#include "erroritem.h" // IWYU pragma: keep
 #include "translationhandler.h"
+
+#ifdef _WIN32
+#include "aboutdialog.h"
+
+#include <QMessageBox>
+#else
+#include <iostream>
+#endif
+#include <algorithm>
+#include <string>
+
+#include <QApplication>
+#include <QCoreApplication>
+#include <QIcon>
+#include <QSettings>
+#include <QString>
+#include <QStringList>
+#include <QVariant>
 
 
 static void ShowUsage();
@@ -41,35 +48,29 @@ static bool CheckArgs(const QStringList &args);
 int main(int argc, char *argv[])
 {
 
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 6, 0))
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)) && (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
 #endif
 
     QApplication app(argc, argv);
 
-#if QT_VERSION < 0x050000
-    // Set codecs so that UTF-8 strings in sources are handled correctly.
-    // This is ONLY needed for Qt versions 4.x.
-    // Qt 5.x assumes UTF-8 by default.
-    QTextCodec::setCodecForTr(QTextCodec::codecForName("UTF-8"));
-    QTextCodec::setCodecForCStrings(QTextCodec::codecForName("UTF-8"));
-#endif
-
     QCoreApplication::setOrganizationName("Cppcheck");
     QCoreApplication::setApplicationName("Cppcheck-GUI");
 
-    QSettings* settings = new QSettings("Cppcheck", "Cppcheck-GUI", &app);
+    auto* settings = new QSettings("Cppcheck", "Cppcheck-GUI", &app);
 
     // Set data dir..
-    foreach (const QString arg, app.arguments()) {
-        if (arg.startsWith("--data-dir=")) {
-            settings->setValue("DATADIR", arg.mid(11));
-            return 0;
-        }
+    const QStringList args = QApplication::arguments();
+    auto it = std::find_if(args.cbegin(), args.cend(), [](const QString& arg) {
+        return arg.startsWith("--data-dir=");
+    });
+    if (it != args.end()) {
+        settings->setValue("DATADIR", it->mid(11));
+        return 0;
     }
 
-    TranslationHandler* th = new TranslationHandler(&app);
+    auto* th = new TranslationHandler(&app);
     th->setLanguage(settings->value(SETTINGS_LANGUAGE, th->suggestLanguage()).toString());
 
     if (!CheckArgs(QApplication::arguments()))

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,43 +18,92 @@
 
 #include "statsdialog.h"
 
-#include <QPrinter>
+#include "checkstatistics.h"
+#include "projectfile.h"
+#include "showtypes.h"
+
+#include <algorithm>
+
+#include "ui_statsdialog.h"
+
+#include <QApplication>
+#include <QClipboard>
 #include <QDate>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMimeData>
+#include <QPageSize>
+#include <QPlainTextEdit>
+#include <QPrinter>
+#include <QPushButton>
+#include <QStringList>
 #include <QTextDocument>
 #include <QWidget>
-#include <QClipboard>
-#include <QMimeData>
+#include <Qt>
 
-#include "projectfile.h"
-#include "checkstatistics.h"
+#ifdef QT_CHARTS_LIB
 #include "common.h"
+
+#include <QAbstractSeries>
+#include <QChartView>
+#include <QDateTime>
+#include <QDateTimeAxis>
+#include <QDir>
+#include <QFile>
+#include <QIODevice>
+#include <QLayout>
+#include <QLineSeries>
+#include <QList>
+#include <QPainter>
+#include <QPointF>
+#include <QRegularExpression>
+#include <QTextStream>
+#include <QValueAxis>
+
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+QT_CHARTS_USE_NAMESPACE
+#endif
+
+static QLineSeries *numberOfReports(const QString &fileName, const QString &severity);
+static QChartView *createChart(const QString &statsFile, const QString &tool);
+#endif
 
 static const QString CPPCHECK("cppcheck");
 
 StatsDialog::StatsDialog(QWidget *parent)
     : QDialog(parent),
-    mStatistics(nullptr)
+    mUI(new Ui::StatsDialog)
 {
-    mUI.setupUi(this);
+    mUI->setupUi(this);
+
+    QFont font("courier");
+    font.setStyleHint(QFont::Monospace);
+    mUI->mCheckersReport->setFont(font);
 
     setWindowFlags(Qt::Window);
 
-    connect(mUI.mCopyToClipboard, &QPushButton::pressed, this, &StatsDialog::copyToClipboard);
-    connect(mUI.mPDFexport, &QPushButton::pressed, this, &StatsDialog::pdfExport);
+    connect(mUI->mCopyToClipboard, &QPushButton::pressed, this, &StatsDialog::copyToClipboard);
+    connect(mUI->mPDFexport, &QPushButton::pressed, this, &StatsDialog::pdfExport);
+}
+
+StatsDialog::~StatsDialog()
+{
+    delete mUI;
 }
 
 void StatsDialog::setProject(const ProjectFile* projectFile)
 {
     if (projectFile) {
-        mUI.mProject->setText(projectFile->getRootPath());
-        mUI.mPaths->setText(projectFile->getCheckPaths().join(";"));
-        mUI.mIncludePaths->setText(projectFile->getIncludeDirs().join(";"));
-        mUI.mDefines->setText(projectFile->getDefines().join(";"));
-        mUI.mUndefines->setText(projectFile->getUndefines().join(";"));
-#ifndef HAVE_QCHART
-        mUI.mTabHistory->setVisible(false);
+        mUI->mProject->setText(projectFile->getRootPath());
+        mUI->mPaths->setText(projectFile->getCheckPaths().join(";"));
+        mUI->mIncludePaths->setText(projectFile->getIncludeDirs().join(";"));
+        mUI->mDefines->setText(projectFile->getDefines().join(";"));
+        mUI->mUndefines->setText(projectFile->getUndefines().join(";"));
+#ifndef QT_CHARTS_LIB
+        mUI->mTabHistory->setVisible(false);
 #else
         QString statsFile;
         if (!projectFile->getBuildDir().isEmpty()) {
@@ -64,49 +113,48 @@ void StatsDialog::setProject(const ProjectFile* projectFile)
                 statsFile = buildDir + "/statistics.txt";
             }
         }
-        mUI.mLblHistoryFile->setText(tr("File: ") + (statsFile.isEmpty() ? tr("No cppcheck build dir") : statsFile));
+        mUI->mLblHistoryFile->setText(tr("File: ") + (statsFile.isEmpty() ? tr("No cppcheck build dir") : statsFile));
         if (!statsFile.isEmpty()) {
-            QChartView *chartView;
-            chartView = createChart(statsFile, "cppcheck");
-            mUI.mTabHistory->layout()->addWidget(chartView);
+            QChartView *chartView = createChart(statsFile, "cppcheck");
+            mUI->mTabHistory->layout()->addWidget(chartView);
             if (projectFile->getClangAnalyzer()) {
                 chartView = createChart(statsFile, CLANG_ANALYZER);
-                mUI.mTabHistory->layout()->addWidget(chartView);
+                mUI->mTabHistory->layout()->addWidget(chartView);
             }
             if (projectFile->getClangTidy()) {
                 chartView = createChart(statsFile, CLANG_TIDY);
-                mUI.mTabHistory->layout()->addWidget(chartView);
+                mUI->mTabHistory->layout()->addWidget(chartView);
             }
         }
 #endif
     } else {
-        mUI.mProject->setText(QString());
-        mUI.mPaths->setText(QString());
-        mUI.mIncludePaths->setText(QString());
-        mUI.mDefines->setText(QString());
-        mUI.mUndefines->setText(QString());
+        mUI->mProject->setText(QString());
+        mUI->mPaths->setText(QString());
+        mUI->mIncludePaths->setText(QString());
+        mUI->mDefines->setText(QString());
+        mUI->mUndefines->setText(QString());
     }
 }
 
 void StatsDialog::setPathSelected(const QString& path)
 {
-    mUI.mPath->setText(path);
+    mUI->mPath->setText(path);
 }
 
 void StatsDialog::setNumberOfFilesScanned(int num)
 {
-    mUI.mNumberOfFilesScanned->setText(QString::number(num));
+    mUI->mNumberOfFilesScanned->setText(QString::number(num));
 }
 
 void StatsDialog::setScanDuration(double seconds)
 {
     // Factor the duration into units (days/hours/minutes/seconds)
     int secs = seconds;
-    int days = secs / (24 * 60 * 60);
+    const int days = secs / (24 * 60 * 60);
     secs -= days * (24 * 60 * 60);
-    int hours = secs / (60 * 60);
+    const int hours = secs / (60 * 60);
     secs -= hours * (60 * 60);
-    int mins = secs / 60;
+    const int mins = secs / 60;
     secs -= mins * 60;
 
     // Concatenate the two most significant units (e.g. "1 day and 3 hours")
@@ -124,7 +172,7 @@ void StatsDialog::setScanDuration(double seconds)
     if (parts.isEmpty())
         parts << tr("0.%1 seconds").arg(int(10.0 *(seconds - secs)));
 
-    mUI.mScanDuration->setText(parts.join(tr(" and ")));
+    mUI->mScanDuration->setText(parts.join(tr(" and ")));
 }
 void StatsDialog::pdfExport()
 {
@@ -157,7 +205,7 @@ void StatsDialog::pdfExport()
     }
     QPrinter printer(QPrinter::PrinterResolution);
     printer.setOutputFormat(QPrinter::PdfFormat);
-    printer.setPaperSize(QPrinter::A4);
+    printer.setPageSize(QPageSize(QPageSize::A4));
     printer.setOutputFileName(fileName);
 
     QTextDocument doc;
@@ -202,15 +250,15 @@ void StatsDialog::copyToClipboard()
         )
                              .arg(projSettings)
                              .arg(project)
-                             .arg(mUI.mProject->text())
+                             .arg(mUI->mProject->text())
                              .arg(paths)
-                             .arg(mUI.mPaths->text())
+                             .arg(mUI->mPaths->text())
                              .arg(incPaths)
-                             .arg(mUI.mIncludePaths->text())
+                             .arg(mUI->mIncludePaths->text())
                              .arg(defines)
-                             .arg(mUI.mDefines->text())
+                             .arg(mUI->mDefines->text())
                              .arg(undefines)
-                             .arg(mUI.mUndefines->text());
+                             .arg(mUI->mUndefines->text());
 
     const QString previous = QString(
         "%1\n"
@@ -220,11 +268,11 @@ void StatsDialog::copyToClipboard()
         )
                              .arg(prevScan)
                              .arg(selPath)
-                             .arg(mUI.mPath->text())
+                             .arg(mUI->mPath->text())
                              .arg(numFiles)
-                             .arg(mUI.mNumberOfFilesScanned->text())
+                             .arg(mUI->mNumberOfFilesScanned->text())
                              .arg(duration)
-                             .arg(mUI.mScanDuration->text());
+                             .arg(mUI->mScanDuration->text());
 
     const QString statistics = QString(
         "%1\n"
@@ -264,15 +312,15 @@ void StatsDialog::copyToClipboard()
         )
                                  .arg(projSettings)
                                  .arg(project)
-                                 .arg(mUI.mProject->text())
+                                 .arg(mUI->mProject->text())
                                  .arg(paths)
-                                 .arg(mUI.mPaths->text())
+                                 .arg(mUI->mPaths->text())
                                  .arg(incPaths)
-                                 .arg(mUI.mIncludePaths->text())
+                                 .arg(mUI->mIncludePaths->text())
                                  .arg(defines)
-                                 .arg(mUI.mDefines->text())
+                                 .arg(mUI->mDefines->text())
                                  .arg(undefines)
-                                 .arg(mUI.mUndefines->text());
+                                 .arg(mUI->mUndefines->text());
 
     const QString htmlPrevious = QString(
         "<h3>%1</h3>\n"
@@ -284,11 +332,11 @@ void StatsDialog::copyToClipboard()
         )
                                  .arg(prevScan)
                                  .arg(selPath)
-                                 .arg(mUI.mPath->text())
+                                 .arg(mUI->mPath->text())
                                  .arg(numFiles)
-                                 .arg(mUI.mNumberOfFilesScanned->text())
+                                 .arg(mUI->mNumberOfFilesScanned->text())
                                  .arg(duration)
-                                 .arg(mUI.mScanDuration->text());
+                                 .arg(mUI->mScanDuration->text());
 
     const QString htmlStatistics = QString(
         "<h3>%1</h3>\n"
@@ -316,7 +364,7 @@ void StatsDialog::copyToClipboard()
 
     const QString htmlSummary = htmlSettings + htmlPrevious + htmlStatistics;
 
-    QMimeData *mimeData = new QMimeData();
+    auto *mimeData = new QMimeData();
     mimeData->setText(textSummary);
     mimeData->setHtml(htmlSummary);
     clipboard->setMimeData(mimeData);
@@ -325,44 +373,46 @@ void StatsDialog::copyToClipboard()
 void StatsDialog::setStatistics(const CheckStatistics *stats)
 {
     mStatistics = stats;
-    mUI.mLblErrors->setText(QString("%1").arg(stats->getCount(CPPCHECK,ShowTypes::ShowErrors)));
-    mUI.mLblWarnings->setText(QString("%1").arg(stats->getCount(CPPCHECK,ShowTypes::ShowWarnings)));
-    mUI.mLblStyle->setText(QString("%1").arg(stats->getCount(CPPCHECK,ShowTypes::ShowStyle)));
-    mUI.mLblPortability->setText(QString("%1").arg(stats->getCount(CPPCHECK,ShowTypes::ShowPortability)));
-    mUI.mLblPerformance->setText(QString("%1").arg(stats->getCount(CPPCHECK,ShowTypes::ShowPerformance)));
-    mUI.mLblInformation->setText(QString("%1").arg(stats->getCount(CPPCHECK,ShowTypes::ShowInformation)));
+    mUI->mLblErrors->setText(QString::number(stats->getCount(CPPCHECK,ShowTypes::ShowErrors)));
+    mUI->mLblWarnings->setText(QString::number(stats->getCount(CPPCHECK,ShowTypes::ShowWarnings)));
+    mUI->mLblStyle->setText(QString::number(stats->getCount(CPPCHECK,ShowTypes::ShowStyle)));
+    mUI->mLblPortability->setText(QString::number(stats->getCount(CPPCHECK,ShowTypes::ShowPortability)));
+    mUI->mLblPerformance->setText(QString::number(stats->getCount(CPPCHECK,ShowTypes::ShowPerformance)));
+    mUI->mLblInformation->setText(QString::number(stats->getCount(CPPCHECK,ShowTypes::ShowInformation)));
+    mUI->mLblActiveCheckers->setText(QString::number(stats->getNumberOfActiveCheckers()));
+    mUI->mCheckersReport->setPlainText(stats->getCheckersReport());
 }
 
-#ifdef HAVE_QCHART
-QChartView *StatsDialog::createChart(const QString &statsFile, const QString &tool)
+#ifdef QT_CHARTS_LIB
+QChartView *createChart(const QString &statsFile, const QString &tool)
 {
-    QChart *chart = new QChart;
+    auto *chart = new QChart;
     chart->addSeries(numberOfReports(statsFile, tool + "-error"));
     chart->addSeries(numberOfReports(statsFile, tool + "-warning"));
     chart->addSeries(numberOfReports(statsFile, tool + "-style"));
     chart->addSeries(numberOfReports(statsFile, tool + "-performance"));
     chart->addSeries(numberOfReports(statsFile, tool + "-portability"));
 
-    QDateTimeAxis *axisX = new QDateTimeAxis;
+    auto *axisX = new QDateTimeAxis;
     axisX->setTitleText("Date");
     chart->addAxis(axisX, Qt::AlignBottom);
 
-    foreach (QAbstractSeries *s, chart->series()) {
+    for (QAbstractSeries *s : chart->series()) {
         s->attachAxis(axisX);
     }
 
-    QValueAxis *axisY = new QValueAxis;
+    auto *axisY = new QValueAxis;
     axisY->setLabelFormat("%i");
     axisY->setTitleText("Count");
     chart->addAxis(axisY, Qt::AlignLeft);
 
     qreal maxY = 0;
-    foreach (QAbstractSeries *s, chart->series()) {
+    for (QAbstractSeries *s : chart->series()) {
         s->attachAxis(axisY);
-        if (QLineSeries *ls = dynamic_cast<QLineSeries*>(s)) {
-            foreach (QPointF p, ls->points()) {
-                if (p.y() > maxY)
-                    maxY = p.y();
+        if (const auto *ls = dynamic_cast<const QLineSeries*>(s)) {
+            for (QPointF p : ls->points()) {
+                // cppcheck-suppress useStlAlgorithm - this would reduce the readability of the code
+                maxY = std::max(p.y(), maxY);
             }
         }
     }
@@ -371,14 +421,14 @@ QChartView *StatsDialog::createChart(const QString &statsFile, const QString &to
     //chart->createDefaultAxes();
     chart->setTitle(tool);
 
-    QChartView *chartView = new QChartView(chart);
+    auto *chartView = new QChartView(chart);
     chartView->setRenderHint(QPainter::Antialiasing);
     return chartView;
 }
 
-QLineSeries *StatsDialog::numberOfReports(const QString &fileName, const QString &severity) const
+QLineSeries *numberOfReports(const QString &fileName, const QString &severity)
 {
-    QLineSeries *series = new QLineSeries();
+    auto *series = new QLineSeries();
     series->setName(severity);
     QFile f(fileName);
     if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -386,11 +436,12 @@ QLineSeries *StatsDialog::numberOfReports(const QString &fileName, const QString
         QTextStream in(&f);
         while (!in.atEnd()) {
             QString line = in.readLine();
-            QRegExp rxdate("\\[(\\d\\d)\\.(\\d\\d)\\.(\\d\\d\\d\\d)\\]");
-            if (rxdate.exactMatch(line)) {
-                int y = rxdate.cap(3).toInt();
-                int m = rxdate.cap(2).toInt();
-                int d = rxdate.cap(1).toInt();
+            static const QRegularExpression rxdate("^\\[(\\d\\d)\\.(\\d\\d)\\.(\\d\\d\\d\\d)\\]$");
+            const QRegularExpressionMatch matchRes = rxdate.match(line);
+            if (matchRes.hasMatch()) {
+                const int y = matchRes.captured(3).toInt();
+                const int m = matchRes.captured(2).toInt();
+                const int d = matchRes.captured(1).toInt();
                 QDateTime dt;
                 dt.setDate(QDate(y,m,d));
                 if (t == dt.toMSecsSinceEpoch())
@@ -399,7 +450,7 @@ QLineSeries *StatsDialog::numberOfReports(const QString &fileName, const QString
                     t = dt.toMSecsSinceEpoch();
             }
             if (line.startsWith(severity + ':')) {
-                int y = line.mid(1+severity.length()).toInt();
+                const int y = line.mid(1+severity.length()).toInt();
                 series->append(t, y);
             }
         }

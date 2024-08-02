@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,13 +19,12 @@
 #include "printablereport.h"
 
 #include "erroritem.h"
+
 #include <QDir>
+#include <QList>
 
 PrintableReport::PrintableReport() :
     Report(QString())
-{}
-
-PrintableReport::~PrintableReport()
 {}
 
 bool PrintableReport::create()
@@ -53,7 +52,7 @@ void PrintableReport::writeError(const ErrorItem &error)
     mFormattedReport += "\n";
 }
 
-QString PrintableReport::getFormattedReportText() const
+const QString& PrintableReport::getFormattedReportText() const
 {
     return mFormattedReport;
 }

@@ -1,9 +1,31 @@
+/*
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2024 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "pathanalysis.h"
+
 #include "astutils.h"
 #include "symboldatabase.h"
 #include "token.h"
-#include "valueflow.h"
+#include "vfvalue.h"
+
 #include <algorithm>
+#include <string>
+#include <tuple>
 
 const Scope* PathAnalysis::findOuterScope(const Scope * scope)
 {
@@ -30,11 +52,11 @@ std::pair<bool, bool> PathAnalysis::checkCond(const Token * tok, bool& known)
         known = true;
         return std::make_pair(tok->values().front().intvalue, !tok->values().front().intvalue);
     }
-    auto it = std::find_if(tok->values().begin(), tok->values().end(), [](const ValueFlow::Value& v) {
+    auto it = std::find_if(tok->values().cbegin(), tok->values().cend(), [](const ValueFlow::Value& v) {
         return v.isIntValue();
     });
     // If all possible values are the same, then assume all paths have the same value
-    if (it != tok->values().end() && std::all_of(it, tok->values().end(), [&](const ValueFlow::Value& v) {
+    if (it != tok->values().cend() && std::all_of(it, tok->values().cend(), [&](const ValueFlow::Value& v) {
         if (v.isIntValue())
             return v.intvalue == it->intvalue;
         return true;
@@ -45,7 +67,7 @@ std::pair<bool, bool> PathAnalysis::checkCond(const Token * tok, bool& known)
     return std::make_pair(true, true);
 }
 
-PathAnalysis::Progress PathAnalysis::forwardRecursive(const Token* tok, Info info, const std::function<PathAnalysis::Progress(const Info&)>& f) const
+PathAnalysis::Progress PathAnalysis::forwardRecursive(const Token* tok, Info info, const std::function<PathAnalysis::Progress(const Info&)>& f)
 {
     if (!tok)
         return Progress::Continue;
@@ -54,21 +76,22 @@ PathAnalysis::Progress PathAnalysis::forwardRecursive(const Token* tok, Info inf
     info.tok = tok;
     if (f(info) == Progress::Break)
         return Progress::Break;
-    if (tok->astOperand2() && forwardRecursive(tok->astOperand2(), info, f) == Progress::Break)
+    if (tok->astOperand2() && forwardRecursive(tok->astOperand2(), std::move(info), f) == Progress::Break)
         return Progress::Break;
     return Progress::Continue;
 }
 
 PathAnalysis::Progress PathAnalysis::forwardRange(const Token* startToken, const Token* endToken, Info info, const std::function<PathAnalysis::Progress(const Info&)>& f) const
 {
-    for (const Token *tok = startToken; tok && tok != endToken; tok = tok->next()) {
+    for (const Token *tok = startToken; precedes(tok, endToken); tok = tok->next()) {
         if (Token::Match(tok, "asm|goto|break|continue"))
             return Progress::Break;
-        else if (Token::Match(tok, "return|throw")) {
-            forwardRecursive(tok, info, f);
+        if (Token::Match(tok, "return|throw")) {
+            forwardRecursive(tok, std::move(info), f);
             return Progress::Break;
             // Evaluate RHS of assignment before LHS
-        } else if (const Token* assignTok = assignExpr(tok)) {
+        }
+        if (const Token* assignTok = assignExpr(tok)) {
             if (forwardRecursive(assignTok->astOperand2(), info, f) == Progress::Break)
                 return Progress::Break;
             if (forwardRecursive(assignTok->astOperand1(), info, f) == Progress::Break)
@@ -100,14 +123,14 @@ PathAnalysis::Progress PathAnalysis::forwardRange(const Token* startToken, const
             if (Token::simpleMatch(tok, "} else {")) {
                 tok = tok->linkAt(2);
             }
-        } else if (Token::Match(tok, "if|while|for (") && Token::simpleMatch(tok->next()->link(), ") {")) {
-            const Token * endCond = tok->next()->link();
-            const Token * endBlock = endCond->next()->link();
+        } else if (Token::Match(tok, "if|while|for (") && Token::simpleMatch(tok->linkAt(1), ") {")) {
+            const Token * endCond = tok->linkAt(1);
+            const Token * endBlock = endCond->linkAt(1);
             const Token * condTok = getCondTok(tok);
             if (!condTok)
                 continue;
             // Traverse condition
-            if (forwardRange(tok->next(), tok->next()->link(), info, f) == Progress::Break)
+            if (forwardRange(tok->next(), tok->linkAt(1), info, f) == Progress::Break)
                 return Progress::Break;
             Info i = info;
             i.known = false;
@@ -127,7 +150,7 @@ PathAnalysis::Progress PathAnalysis::forwardRange(const Token* startToken, const
             if (Token::simpleMatch(endBlock, "} else {")) {
                 if (checkElse) {
                     i.errorPath.back().second = "Assuming condition is false.";
-                    Progress result = forwardRange(endCond->next(), endBlock, i, f);
+                    const Progress result = forwardRange(endCond->next(), endBlock, std::move(i), f);
                     if (result == Progress::Break)
                         return Progress::Break;
                 }
@@ -156,7 +179,7 @@ void PathAnalysis::forward(const std::function<Progress(const Info&)>& f) const
         return;
     const Token * endToken = endScope->bodyEnd;
     Info info{start, ErrorPath{}, true};
-    forwardRange(start, endToken, info, f);
+    forwardRange(start, endToken, std::move(info), f);
 }
 
 bool reaches(const Token * start, const Token * dest, const Library& library, ErrorPath* errorPath)
@@ -167,6 +190,6 @@ bool reaches(const Token * start, const Token * dest, const Library& library, Er
     if (!info.tok)
         return false;
     if (errorPath)
-        errorPath->insert(errorPath->end(), info.errorPath.begin(), info.errorPath.end());
+        errorPath->insert(errorPath->end(), info.errorPath.cbegin(), info.errorPath.cend());
     return true;
 }

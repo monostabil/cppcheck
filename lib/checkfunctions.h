@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,16 +24,15 @@
 
 #include "check.h"
 #include "config.h"
+#include "errortypes.h"
 #include "library.h"
 #include "settings.h"
-#include "errortypes.h"
+#include "tokenize.h"
 
 #include <map>
 #include <string>
-#include <utility>
 
 class Token;
-class Tokenizer;
 class ErrorLogger;
 
 namespace ValueFlow {
@@ -53,13 +52,14 @@ public:
     /** This constructor is used when registering the CheckFunctions */
     CheckFunctions() : Check(myName()) {}
 
+private:
     /** This constructor is used when running checks. */
     CheckFunctions(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger)
         : Check(myName(), tokenizer, settings, errorLogger) {}
 
     /** @brief Run checks against the normal token list */
-    void runChecks(const Tokenizer *tokenizer, const Settings *settings, ErrorLogger *errorLogger) OVERRIDE {
-        CheckFunctions checkFunctions(tokenizer, settings, errorLogger);
+    void runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger) override {
+        CheckFunctions checkFunctions(&tokenizer, &tokenizer.getSettings(), errorLogger);
 
         checkFunctions.checkIgnoredReturnValue();
         checkFunctions.checkMissingReturn();  // Missing "return" in exit path
@@ -73,6 +73,7 @@ public:
         checkFunctions.memsetZeroBytes();
         checkFunctions.memsetInvalid2ndParam();
         checkFunctions.returnLocalStdMove();
+        checkFunctions.useStandardLibrary();
     }
 
     /** Check for functions that should not be used */
@@ -103,10 +104,11 @@ public:
     /** @brief %Check for copy elision by RVO|NRVO */
     void returnLocalStdMove();
 
+    void useStandardLibrary();
+
     /** @brief --check-library: warn for unconfigured function calls */
     void checkLibraryMatchFunctions();
 
-private:
     /** @brief %Check for missing "return" */
     void checkMissingReturn();
 
@@ -122,11 +124,12 @@ private:
     void memsetValueOutOfRangeError(const Token *tok, const std::string &value);
     void missingReturnError(const Token *tok);
     void copyElisionError(const Token *tok);
+    void useStandardLibraryError(const Token *tok, const std::string& expected);
 
-    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const OVERRIDE {
+    void getErrorMessages(ErrorLogger *errorLogger, const Settings *settings) const override {
         CheckFunctions c(nullptr, settings, errorLogger);
 
-        for (std::map<std::string, Library::WarnInfo>::const_iterator i = settings->library.functionwarn.cbegin(); i != settings->library.functionwarn.cend(); ++i) {
+        for (std::map<std::string, Library::WarnInfo>::const_iterator i = settings->library.functionwarn().cbegin(); i != settings->library.functionwarn().cend(); ++i) {
             c.reportError(nullptr, Severity::style, i->first+"Called", i->second.message);
         }
 
@@ -141,13 +144,14 @@ private:
         c.memsetValueOutOfRangeError(nullptr,  "varname");
         c.missingReturnError(nullptr);
         c.copyElisionError(nullptr);
+        c.useStandardLibraryError(nullptr, "memcpy");
     }
 
     static std::string myName() {
         return "Check function usage";
     }
 
-    std::string classInfo() const OVERRIDE {
+    std::string classInfo() const override {
         return "Check function usage:\n"
                "- missing 'return' in non-void function\n"
                "- return value of certain functions not used\n"
@@ -156,7 +160,8 @@ private:
                "- memset() third argument is zero\n"
                "- memset() with a value out of range as the 2nd parameter\n"
                "- memset() with a float as the 2nd parameter\n"
-               "- copy elision optimization for returning value affected by std::move\n";
+               "- copy elision optimization for returning value affected by std::move\n"
+               "- use memcpy()/memset() instead of for loop\n";
     }
 };
 /// @}

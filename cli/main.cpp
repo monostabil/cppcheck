@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +20,7 @@
 /**
  *
  * @mainpage Cppcheck
- * @version 2.6.99
+ * @version 2.14.99
  *
  * @section overview_sec Overview
  * Cppcheck is a simple tool for static analysis of C/C++ code.
@@ -52,8 +52,6 @@
  *   - Macros are expanded
  * -# Tokenize the file (see Tokenizer)
  * -# Run the runChecks of all check classes.
- * -# Simplify the tokenlist (Tokenizer::simplifyTokenList2)
- * -# Run the runSimplifiedChecks of all check classes
  *
  * When errors are found, they are reported back to the CppCheckExecutor through the ErrorLogger interface.
  */
@@ -61,12 +59,13 @@
 
 #include "cppcheckexecutor.h"
 
+#ifdef NDEBUG
+#include "errortypes.h"
+
+#include <cstdlib>
+#include <exception>
 #include <iostream>
-
-#ifdef _WIN32
-#include <windows.h>
-
-static char exename[1024] = {0};
+#include <string>
 #endif
 
 /**
@@ -84,10 +83,7 @@ int main(int argc, char* argv[])
 #endif
 
     CppCheckExecutor exec;
-#ifdef _WIN32
-    GetModuleFileNameA(nullptr, exename, sizeof(exename)/sizeof(exename[0])-1);
-    argv[0] = exename;
-#endif
+
 // *INDENT-OFF*
 #ifdef NDEBUG
     try {
@@ -105,19 +101,3 @@ int main(int argc, char* argv[])
 #endif
 // *INDENT-ON*
 }
-
-
-// Warn about deprecated compilers
-#ifdef __clang__
-#   if (__clang_major__ < 2 || (__clang_major__  == 2 && __clang_minor__ < 9))
-#       warning "Using Clang 2.8 or earlier. Support for this version has been removed."
-#   endif
-#elif defined(__GNUC__)
-#   if (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 6))
-#       warning "Using GCC 4.5 or earlier. Support for this version has been removed."
-#   endif
-#elif defined(_MSC_VER)
-#   if (_MSC_VER < 1800)
-#       pragma message("WARNING: Using Visual Studio 2012 or earlier. Support for this version has been removed.")
-#   endif
-#endif

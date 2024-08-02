@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2021 Cppcheck team.
+ * Copyright (C) 2007-2023 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@
 
 #include "config.h"
 #include "mathlib.h"
+
+#include <cstdint>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -32,15 +34,18 @@ class ValuePtr;
 struct Analyzer {
     struct Action {
 
-        Action() : mFlag(0) {}
+        Action() = default;
+        Action(const Action&) = default;
+        Action& operator=(const Action& rhs) = default;
 
         template<class T,
                  REQUIRES("T must be convertible to unsigned int", std::is_convertible<T, unsigned int> ),
                  REQUIRES("T must not be a bool", !std::is_same<T, bool> )>
+        // NOLINTNEXTLINE(google-explicit-constructor)
         Action(T f) : mFlag(f) // cppcheck-suppress noExplicitConstructor
         {}
 
-        enum {
+        enum : std::uint16_t {
             None = 0,
             Read = (1 << 0),
             Write = (1 << 1),
@@ -50,6 +55,7 @@ struct Analyzer {
             Idempotent = (1 << 5),
             Incremental = (1 << 6),
             SymbolicMatch = (1 << 7),
+            Internal = (1 << 8),
         };
 
         void set(unsigned int f, bool state = true) {
@@ -96,6 +102,10 @@ struct Analyzer {
             return get(SymbolicMatch);
         }
 
+        bool isInternal() const {
+            return get(Internal);
+        }
+
         bool matches() const {
             return get(Match);
         }
@@ -119,13 +129,13 @@ struct Analyzer {
         }
 
     private:
-        unsigned int mFlag;
+        unsigned int mFlag{};
     };
 
-    enum class Terminate { None, Bail, Escape, Modified, Inconclusive, Conditional };
+    enum class Terminate : std::uint8_t { None, Bail, Escape, Modified, Inconclusive, Conditional };
 
     struct Result {
-        Result(Action action = Action::None, Terminate terminate = Terminate::None)
+        explicit Result(Action action = Action::None, Terminate terminate = Terminate::None)
             : action(action), terminate(terminate)
         {}
         Action action;
@@ -138,10 +148,10 @@ struct Analyzer {
         }
     };
 
-    enum class Direction { Forward, Reverse };
+    enum class Direction : std::uint8_t { Forward, Reverse };
 
     struct Assume {
-        enum Flags {
+        enum Flags : std::uint8_t {
             None = 0,
             Quiet = (1 << 0),
             Absolute = (1 << 1),
@@ -149,7 +159,7 @@ struct Analyzer {
         };
     };
 
-    enum class Evaluate { Integral, ContainerEmpty };
+    enum class Evaluate : std::uint8_t { Integral, ContainerEmpty };
 
     /// Analyze a token
     virtual Action analyze(const Token* tok, Direction d) const = 0;
@@ -167,17 +177,23 @@ struct Analyzer {
     virtual bool lowerToInconclusive() = 0;
     /// If the analysis is unsure whether to update a scope, this will return true if the analysis should bifurcate the scope
     virtual bool updateScope(const Token* endBlock, bool modified) const = 0;
-    /// Called when a scope will be forked
-    virtual void forkScope(const Token* /*endBlock*/) {}
     /// If the value is conditional
     virtual bool isConditional() const = 0;
     /// If analysis should stop on the condition
     virtual bool stopOnCondition(const Token* condTok) const = 0;
     /// The condition that will be assumed during analysis
     virtual void assume(const Token* tok, bool state, unsigned int flags = 0) = 0;
+    /// Update the state of the program at the token
+    virtual void updateState(const Token* tok) = 0;
     /// Return analyzer for expression at token
-    virtual ValuePtr<Analyzer> reanalyze(Token* tok, const std::string& msg = "") const = 0;
-    virtual ~Analyzer() {}
+    virtual ValuePtr<Analyzer> reanalyze(Token* tok, const std::string& msg = emptyString) const = 0;
+    virtual bool invalid() const {
+        return false;
+    }
+    virtual ~Analyzer() = default;
+    Analyzer(const Analyzer&) = default;
+protected:
+    Analyzer() = default;
 };
 
 #endif

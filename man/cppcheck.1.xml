@@ -106,6 +106,9 @@ man(1), man(7), http://www.tldp.org/HOWTO/Man-Page/
         <option>-U&lt;id&gt;</option>
       </arg>
       <arg choice="opt">
+        <option>--disable=&lt;id&gt;</option>
+      </arg>
+      <arg choice="opt">
         <option>--enable=&lt;id&gt;</option>
       </arg>
       <arg choice="opt">
@@ -122,6 +125,12 @@ man(1), man(7), http://www.tldp.org/HOWTO/Man-Page/
       </arg>
       <arg choice="opt">
         <option>--force</option>
+      </arg>
+      <arg choice="opt">
+        <option>--fsigned-char</option>
+      </arg>
+      <arg choice="opt">
+        <option>--funsigned-char</option>
       </arg>
       <arg choice="opt">
         <option>--help</option>
@@ -185,6 +194,9 @@ man(1), man(7), http://www.tldp.org/HOWTO/Man-Page/
       </arg>
       <arg choice="opt">
         <option>--rule-file=&lt;file&gt;</option>
+      </arg>
+      <arg choice="opt">
+        <option>--showtime=&lt;mode&gt;</option>
       </arg>
       <arg choice="opt">
         <option>--std=&lt;id&gt;</option>
@@ -274,6 +286,15 @@ Example: '-UDEBUG'</para>
       </varlistentry>
       <varlistentry>
         <term>
+          <option>--disable=&lt;id&gt;</option>
+        </term>
+        <listitem>
+          <para>Disable individual checks. Please refer to the documentation of --enable=&lt;id&gt; for further details.
+          </para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term>
           <option>--enable=&lt;id&gt;</option>
         </term>
         <listitem>
@@ -283,7 +304,7 @@ Example: '-UDEBUG'</para>
                   enables unusedFunction.</para></glossdef></glossentry><glossentry><glossterm>warning</glossterm><glossdef><para>Enable warning messages</para></glossdef></glossentry><glossentry><glossterm>style</glossterm><glossdef><para>Enable all coding style checks. All messages with the
                   severities 'style', 'performance' and 'portability' are
                   enabled.</para></glossdef></glossentry><glossentry><glossterm>performance</glossterm><glossdef><para>Enable performance messages</para></glossdef></glossentry><glossentry><glossterm>portability</glossterm><glossdef><para>Enable portability messages</para></glossdef></glossentry><glossentry><glossterm>information</glossterm><glossdef><para>Enable information messages</para></glossdef></glossentry><glossentry><glossterm>unusedFunction</glossterm><glossdef><para>Check for unused functions. It is recommend to only
-                  enable this when the whole program is scanned</para></glossdef></glossentry><glossentry><glossterm>missingInclude</glossterm><glossdef><para>Warn if there are missing includes. For detailed information use --check-config</para></glossdef></glossentry></glosslist>
+                  enable this when the whole program is scanned</para></glossdef></glossentry><glossentry><glossterm>missingInclude</glossterm><glossdef><para>Warn if there are missing includes</para></glossdef></glossentry></glosslist>
             By default none of the additional checks are enabled. Several ids can be given if you separate them with commas, e.g. --enable=style,unusedFunction. See also --std
           </para>
         </listitem>
@@ -333,6 +354,22 @@ Example: '-UDEBUG'</para>
         <listitem>
           <para>Force checking of files that have a lot of configurations. Error is printed if such a file is found so there is no reason to use this by
 default. If used together with --max-configs=, the last option is the one that is effective.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term>
+            <option>--fsigned-char</option>
+        </term>
+        <listitem>
+            <para>Treat char type as signed. This overrides previous --platform options and is overridden by following ones.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term>
+          <option>--funsigned-char</option>
+        </term>
+        <listitem>
+          <para>Treat char type as unsigned. This overrides previous --platform options and is overridden by following ones.</para>
         </listitem>
       </varlistentry>
       <varlistentry>
@@ -462,7 +499,7 @@ There are false positives with this option. Each result must be carefully invest
       </varlistentry>
       <varlistentry>
         <term>
-          <option>--max-ctu-depths=&lt;limit&gt;</option>
+          <option>--max-ctu-depth=&lt;limit&gt;</option>
         </term>
         <listitem>
           <para>Maximum depth in whole program analysis. Default is 2.</para>
@@ -533,12 +570,21 @@ There are false positives with this option. Each result must be carefully invest
       </varlistentry>
       <varlistentry>
         <term>
+          <option>--showtime=&lt;mode&gt;</option>
+        </term>
+        <listitem>
+          <para>Show timing information. The available mode are:
+            <glosslist><glossentry><glossterm>none</glossterm><glossdef><para>Show nothing (default)</para></glossdef></glossentry><glossentry><glossterm>file</glossterm><glossdef><para>Show for each processed file</para></glossdef></glossentry><glossentry><glossterm>file-total</glossterm><glossdef><para>Show total time only for each processed file</para></glossdef></glossentry><glossentry><glossterm>summary</glossterm><glossdef><para>Show a summary at the end</para></glossdef></glossentry><glossentry><glossterm>top5_file</glossterm><glossdef><para>Show the top 5 for each processed file</para></glossdef></glossentry><glossentry><glossterm>top5_summary</glossterm><glossdef><para>Show the top 5 summary at the end</para></glossdef></glossentry><glossentry><glossterm>top5</glossterm><glossdef><para>Alias for top5_file (deprecated)</para></glossdef></glossentry></glosslist>
+          </para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term>
           <option>--std=&lt;id&gt;</option>
         </term>
         <listitem>
           <para>Set standard. The available options are:
-            <glosslist><glossentry><glossterm>posix</glossterm><glossdef><para>POSIX compatible code</para></glossdef></glossentry><glossentry><glossterm>c89</glossterm><glossdef><para>C code is C89 compatible</para></glossdef></glossentry><glossentry><glossterm>c99</glossterm><glossdef><para>C code is C99 compatible</para></glossdef></glossentry><glossentry><glossterm>c11</glossterm><glossdef><para>C code is C11 compatible (default)</para></glossdef></glossentry><glossentry><glossterm>c++03</glossterm><glossdef><para>C++ code is C++03 compatible</para></glossdef></glossentry><glossentry><glossterm>c++11</glossterm><glossdef><para>C++ code is C++11 compatible (default)</para></glossdef></glossentry></glosslist>
-            Example to set more than one standards: 'cppcheck --std=c99 --std=posix file.cpp'
+            <glosslist><glossentry><glossterm>c89</glossterm><glossdef><para>C code is C89 compatible</para></glossdef></glossentry><glossentry><glossterm>c99</glossterm><glossdef><para>C code is C99 compatible</para></glossdef></glossentry><glossentry><glossterm>c11</glossterm><glossdef><para>C code is C11 compatible (default)</para></glossdef></glossentry><glossentry><glossterm>c++03</glossterm><glossdef><para>C++ code is C++03 compatible</para></glossdef></glossentry><glossentry><glossterm>c++11</glossterm><glossdef><para>C++ code is C++11 compatible</para></glossdef></glossentry><glossentry><glossterm>c++14</glossterm><glossdef><para>C++ code is C++14 compatible</para></glossdef></glossentry><glossentry><glossterm>c++17</glossterm><glossdef><para>C++ code is C++17 compatible</para></glossdef></glossentry><glossentry><glossterm>c++20</glossterm><glossdef><para>C++ code is C++20 compatible (default)</para></glossdef></glossentry></glosslist>
           </para>
         </listitem>
       </varlistentry>
@@ -610,7 +656,7 @@ There are false positives with this option. Each result must be carefully invest
           <option>--xml-version=&lt;version&gt;</option>
         </term>
         <listitem>
-          <para>Select the XML file version. Currently versions 1 and 2 are available. The default version is 1.</para>
+          <para>Select the XML file version. Also implies --xml. Currently only version 2 is available. The default version is 2.</para>
         </listitem>
       </varlistentry>
     </variablelist>

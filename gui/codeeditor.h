@@ -1,13 +1,42 @@
+/*
+ * Cppcheck - A tool for static C/C++ code analysis
+ * Copyright (C) 2007-2024 Cppcheck team.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #ifndef CODEEDITOR_H
 #define CODEEDITOR_H
 
-#include <QSyntaxHighlighter>
+#include <cstdint>
+
+#include <QObject>
 #include <QPlainTextEdit>
 #include <QRegularExpression>
+#include <QSize>
+#include <QString>
+#include <QStringList>
+#include <QSyntaxHighlighter>
+#include <QTextCharFormat>
+#include <QVector>
+#include <QWidget>
 
 class CodeEditorStyle;
 class QPaintEvent;
+class QRect;
 class QResizeEvent;
+class QTextDocument;
 
 class Highlighter : public QSyntaxHighlighter {
     Q_OBJECT
@@ -24,7 +53,7 @@ protected:
     void highlightBlock(const QString &text) override;
 
 private:
-    enum RuleRole {
+    enum RuleRole : std::uint8_t {
         Keyword = 1,
         Class   = 2,
         Comment = 3,
@@ -62,9 +91,9 @@ public:
     explicit CodeEditor(QWidget *parent);
     CodeEditor(const CodeEditor &) = delete;
     CodeEditor &operator=(const CodeEditor &) = delete;
-    ~CodeEditor();
+    ~CodeEditor() override;
 
-    void lineNumberAreaPaintEvent(QPaintEvent *event);
+    void lineNumberAreaPaintEvent(const QPaintEvent *event);
     int lineNumberAreaWidth();
     void setStyle(const CodeEditorStyle& newStyle);
 
@@ -87,7 +116,7 @@ public:
         mFileName = fileName;
     }
 
-    QString getFileName() const {
+    const QString& getFileName() const {
         return mFileName;
     }
 
@@ -102,7 +131,7 @@ protected:
 private slots:
     void updateLineNumberAreaWidth(int newBlockCount);
     void highlightErrorLine();
-    void updateLineNumberArea(const QRect &, int);
+    void updateLineNumberArea(const QRect & /*rect*/, int /*dy*/);
 
 private:
     QString generateStyleString();

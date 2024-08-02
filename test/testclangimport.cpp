@@ -1,5 +1,5 @@
 // Cppcheck - A tool for static C/C++ code analysis
-// Copyright (C) 2007-2021 Cppcheck team.
+// Copyright (C) 2007-2024 Cppcheck team.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,10 +15,18 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "clangimport.h"
+#include "platform.h"
 #include "settings.h"
 #include "symboldatabase.h"
+#include "token.h"
 #include "tokenize.h"
-#include "testsuite.h"
+#include "fixture.h"
+
+#include <cstdint>
+#include <list>
+#include <sstream>
+#include <string>
+#include <vector>
 
 
 class TestClangImport : public TestFixture {
@@ -28,7 +36,7 @@ public:
 
 
 private:
-    void run() OVERRIDE {
+    void run() override {
         TEST_CASE(breakStmt);
         TEST_CASE(callExpr);
         TEST_CASE(caseStmt1);
@@ -90,7 +98,8 @@ private:
         TEST_CASE(memberExpr);
         TEST_CASE(namespaceDecl1);
         TEST_CASE(namespaceDecl2);
-        TEST_CASE(recordDecl);
+        TEST_CASE(recordDecl1);
+        TEST_CASE(recordDecl2);
         TEST_CASE(switchStmt);
         TEST_CASE(typedefDecl1);
         TEST_CASE(typedefDecl2);
@@ -125,14 +134,15 @@ private:
 
         TEST_CASE(valueType1);
         TEST_CASE(valueType2);
+
+        TEST_CASE(crash);
     }
 
     std::string parse(const char clang[]) {
-        Settings settings;
-        settings.clang = true;
-        Tokenizer tokenizer(&settings, this);
+        const Settings settings = settingsBuilder().clang().build();
+        Tokenizer tokenizer(settings, *this);
         std::istringstream istr(clang);
-        clangimport::parseClangAstDump(&tokenizer, istr);
+        clangimport::parseClangAstDump(tokenizer, istr);
         if (!tokenizer.tokens()) {
             return std::string();
         }
@@ -574,7 +584,13 @@ private:
     }
 
     void cxxRecordDecl1() {
-        const char clang[] = "`-CXXRecordDecl 0x34cc5f8 <1.cpp:2:1, col:7> col:7 class Foo";
+        const char* clang = "`-CXXRecordDecl 0x34cc5f8 <1.cpp:2:1, col:7> col:7 class Foo";
+        ASSERT_EQUALS("class Foo ;", parse(clang));
+
+        clang = "`-CXXRecordDecl 0x34cc5f8 <C:\\Foo\\Bar Baz\\1.cpp:2:1, col:7> col:7 class Foo";
+        ASSERT_EQUALS("class Foo ;", parse(clang));
+
+        clang = "`-CXXRecordDecl 0x34cc5f8 <C:/Foo/Bar Baz/1.cpp:2:1, col:7> col:7 class Foo";
         ASSERT_EQUALS("class Foo ;", parse(clang));
     }
 
@@ -881,11 +897,18 @@ private:
                       parse(clang));
     }
 
-    void recordDecl() {
+    void recordDecl1() {
         const char clang[] = "`-RecordDecl 0x354eac8 <1.c:1:1, line:4:1> line:1:8 struct S definition\n"
                              "  |-FieldDecl 0x354eb88 <line:2:3, col:7> col:7 x 'int'\n"
                              "  `-FieldDecl 0x354ebe8 <line:3:3, col:7> col:7 y 'int'";
         ASSERT_EQUALS("struct S { int x@1 ; int y@2 ; } ;",
+                      parse(clang));
+    }
+
+    void recordDecl2() {
+        const char clang[] = "`-RecordDecl 0x3befac8 <2.c:2:1, col:22> col:1 struct definition\n"
+                             "  `-FieldDecl 0x3befbf0 <col:10, col:19> col:14 val 'int'";
+        ASSERT_EQUALS("struct { int val@1 ; } ;",
                       parse(clang));
     }
 
@@ -1030,12 +1053,12 @@ private:
 
 
 #define GET_SYMBOL_DB(AST) \
-    Settings settings; \
-    settings.clang = true; \
-    settings.platform(cppcheck::Platform::PlatformType::Unix64); \
-    Tokenizer tokenizer(&settings, this); \
-    std::istringstream istr(AST); \
-    clangimport::parseClangAstDump(&tokenizer, istr); \
+    const Settings settings = settingsBuilder().clang().platform(Platform::Type::Unix64).build(); \
+    Tokenizer tokenizer(settings, *this); \
+    { \
+        std::istringstream istr(AST); \
+        clangimport::parseClangAstDump(tokenizer, istr); \
+    } \
     const SymbolDatabase *db = tokenizer.getSymbolDatabase(); \
     ASSERT(db)
 
@@ -1264,8 +1287,7 @@ private:
         const Token *tok = Token::findsimplematch(tokenizer.tokens(), "sizeof (");
         ASSERT(!!tok);
         tok = tok->next();
-        // TODO ASSERT(tok->hasKnownIntValue());
-        // TODO ASSERT_EQUALS(10, tok->getKnownIntValue());
+        TODO_ASSERT_EQUALS(true, false, tok->hasKnownIntValue() && tok->getKnownIntValue() == 10);
     }
 
     void valueType1() {
@@ -1296,6 +1318,52 @@ private:
         ASSERT(!!tok);
         ASSERT(!!tok->valueType());
         ASSERT_EQUALS("const signed char *", tok->valueType()->str());
+    }
+
+    void crash() {
+        const char* clang = "TranslationUnitDecl 0x56037914f998 <<invalid sloc>> <invalid sloc>\n"
+                            "|-TypedefDecl 0x560379150200 <<invalid sloc>> <invalid sloc> implicit __int128_t '__int128'\n"
+                            "| `-BuiltinType 0x56037914ff60 '__int128'\n"
+                            "|-TypedefDecl 0x560379150270 <<invalid sloc>> <invalid sloc> implicit __uint128_t 'unsigned __int128'\n"
+                            "| `-BuiltinType 0x56037914ff80 'unsigned __int128'\n"
+                            "|-TypedefDecl 0x5603791505e8 <<invalid sloc>> <invalid sloc> implicit __NSConstantString '__NSConstantString_tag'\n"
+                            "| `-RecordType 0x560379150360 '__NSConstantString_tag'\n"
+                            "|   `-CXXRecord 0x5603791502c8 '__NSConstantString_tag'\n"
+                            "|-TypedefDecl 0x560379150680 <<invalid sloc>> <invalid sloc> implicit __builtin_ms_va_list 'char *'\n"
+                            "| `-PointerType 0x560379150640 'char *'\n"
+                            "|   `-BuiltinType 0x56037914fa40 'char'\n"
+                            "|-TypedefDecl 0x5603791968f8 <<invalid sloc>> <invalid sloc> implicit __builtin_va_list '__va_list_tag[1]'\n"
+                            "| `-ConstantArrayType 0x5603791968a0 '__va_list_tag[1]' 1 \n"
+                            "|   `-RecordType 0x560379150770 '__va_list_tag'\n"
+                            "|     `-CXXRecord 0x5603791506d8 '__va_list_tag'\n"
+                            "|-ClassTemplateDecl 0x560379196b58 <test1.cpp:1:1, col:50> col:37 A\n"
+                            "| |-TemplateTypeParmDecl 0x560379196950 <col:11> col:19 typename depth 0 index 0\n"
+                            "| |-TemplateTypeParmDecl 0x5603791969f8 <col:21> col:29 typename depth 0 index 1\n"
+                            "| `-CXXRecordDecl 0x560379196ac8 <col:31, col:50> col:37 class A definition\n"
+                            "|   |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init\n"
+                            "|   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr\n"
+                            "|   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param\n"
+                            "|   | |-MoveConstructor exists simple trivial needs_implicit\n"
+                            "|   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param\n"
+                            "|   | |-MoveAssignment exists simple trivial needs_implicit\n"
+                            "|   | `-Destructor simple irrelevant trivial needs_implicit\n"
+                            "|   |-CXXRecordDecl 0x560379196de0 <col:31, col:37> col:37 implicit referenced class A\n"
+                            "|   `-CXXRecordDecl 0x560379196e70 <col:41, col:47> col:47 class b\n"
+                            "|-CXXRecordDecl 0x560379197110 parent 0x560379196ac8 prev 0x560379196e70 <line:2:1, col:63> col:50 class b definition\n"
+                            "| |-DefinitionData empty standard_layout trivially_copyable has_user_declared_ctor can_const_default_init\n"
+                            "| | |-DefaultConstructor defaulted_is_constexpr\n"
+                            "| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param\n"
+                            "| | |-MoveConstructor exists simple trivial needs_implicit\n"
+                            "| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param\n"
+                            "| | |-MoveAssignment exists simple trivial needs_implicit\n"
+                            "| | `-Destructor simple irrelevant trivial needs_implicit\n"
+                            "| |-CXXRecordDecl 0x560379197250 <col:35, col:50> col:50 implicit referenced class b\n"
+                            "| `-CXXConstructorDecl 0x5603791974b8 <col:54, col:60> col:54 b 'void (A<type-parameter-0-0, type-parameter-0-1> &)'\n"
+                            "|   `-ParmVarDecl 0x560379197380 <col:56, col:59> col:59 a 'A<type-parameter-0-0, type-parameter-0-1> &'\n"
+                            "`-CXXConstructorDecl 0x5603791b5600 parent 0x560379197110 prev 0x5603791974b8 <line:3:1, col:55> col:47 b 'void (A<type-parameter-0-0, type-parameter-0-1> &)'\n"
+                            "  |-ParmVarDecl 0x5603791b5570 <col:49, col:51> col:52 'A<type-parameter-0-0, type-parameter-0-1> &'\n"
+                            "  `-CompoundStmt 0x5603791b5700 <col:54, col:55>\n";
+        parse(clang); // don't crash
     }
 };
 
